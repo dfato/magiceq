@@ -7,6 +7,7 @@
 #include "ui/CompPanel.h"
 #include "ui/LimiterPanel.h"
 #include "ui/Meters.h"
+#include "ui/PresetBar.h"
 #include "ui/EqGraph.h"
 #include "ui/RainLookAndFeel.h"
 
@@ -36,6 +37,7 @@ private:
     magiceq::ui::CompPanel compPanel;
     magiceq::ui::MeterStrip meters;
     magiceq::ui::LimiterPanel limiterPanel;
+    magiceq::ui::PresetBar presetBar;
 
     juce::ComboBox styleBox, lengthBox;
     juce::Slider strength, output;

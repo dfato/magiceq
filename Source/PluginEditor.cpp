@@ -6,7 +6,7 @@ using juce::String;
 
 MagicEQEditor::MagicEQEditor (MagicEQProcessor& p)
     : AudioProcessorEditor (&p), processor (p), graph (p), bandPanel (p), compPanel (p), meters (p),
-      limiterPanel (p, [this] { return meters.getLimiterGrDb(); })
+      limiterPanel (p, [this] { return meters.getLimiterGrDb(); }), presetBar (p)
 {
     setLookAndFeel (&lnf);
 
@@ -15,6 +15,7 @@ MagicEQEditor::MagicEQEditor (MagicEQProcessor& p)
     addAndMakeVisible (compPanel);
     addAndMakeVisible (meters);
     addAndMakeVisible (limiterPanel);
+    addAndMakeVisible (presetBar);
 
     graph.onBandSelected = [this] (int b) { bandPanel.setBand (b); };
     bandPanel.onBandChosen = [this] (int b) { graph.setSelectedBand (b); };
@@ -166,9 +167,13 @@ void MagicEQEditor::updateDetectUi()
         case DS::idle:
         default:
             detectButton.setButtonText ("Detect");
+        {
+            const auto& style = StyleLibrary::get ((int) processor.apvts.getRawParameterValue (params::style)->load());
             status.setText (doneMessage.isNotEmpty() ? doneMessage
-                                                     : "Pick a style, play your vocal, then press Detect.",
+                                                     : String (style.name) + ": " + style.description + " Play your vocal, then press Detect.",
                             juce::dontSendNotification);
+            styleBox.setTooltip (String (style.name) + ": " + style.description);
+        }
             break;
     }
 
@@ -244,8 +249,11 @@ void MagicEQEditor::resized()
     detectButton.setBounds (detectCol.withTrimmedTop (14).withHeight (34));
 
     // Status line with progress bar
-    auto statusRow = r.removeFromTop (26).reduced (16, 0);
+    auto statusRow = r.removeFromTop (34).reduced (16, 0);
     progressBounds = statusRow.removeFromBottom (4);
+    statusRow.removeFromBottom (2);
+    presetBar.setBounds (statusRow.removeFromRight (380));
+    statusRow.removeFromRight (12);
     status.setBounds (statusRow);
 
     r.reduce (12, 8);

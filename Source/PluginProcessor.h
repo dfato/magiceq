@@ -4,6 +4,7 @@
 
 #include "Parameters.h"
 #include "core/MatchFitter.h"
+#include "core/PresetManager.h"
 #include "core/SpectrumAccumulator.h"
 #include "core/Dynamics.h"
 #include "dsp/Compressor.h"
@@ -101,6 +102,15 @@ public:
 
     // ----- A/B compare (message thread only) -----
     void switchAB();
+
+    // ----- Presets (message thread only) -----
+    magiceq::PresetManager& getPresets() noexcept { return presets; }
+    magiceq::ParamValues captureValues() const;
+    bool loadPreset (const juce::String& name);        // one Undo step
+    bool saveCurrentAs (const juce::String& name);
+    juce::String getCurrentPresetName() const { return currentPreset; }
+    bool isPresetModified() const;                    // changed since the preset was loaded or saved
+    void stepPreset (int delta);                      // previous / next
     bool isOnB() const noexcept { return onB; }
 
     /** Current settings of a band, read from the parameters. */
@@ -171,6 +181,11 @@ private:
     // A/B
     bool onB = false;
     juce::ValueTree otherSlot;
+
+    // Presets
+    magiceq::PresetManager presets { magiceq::PresetManager::defaultFolder() };
+    juce::String currentPreset { "Init (Flat)" };
+    magiceq::ParamValues presetSnapshot;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MagicEQProcessor)
 };

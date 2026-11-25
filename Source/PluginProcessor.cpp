@@ -35,6 +35,7 @@ MagicEQProcessor::MagicEQProcessor()
     limReleaseParam  = apvts.getRawParameterValue (params::limRelease);
     limTruePeakParam = apvts.getRawParameterValue (params::limTruePeak);
 
+    presetSnapshot = captureValues();
     startTimerHz (30);
 }
 
@@ -409,9 +410,87 @@ void MagicEQProcessor::switchAB()
     onB = ! onB;
 }
 
+// ============================================================================
+// Presets
+// ============================================================================
+
+ParamValues MagicEQProcessor::captureValues() const
+{
+    ParamValues v;
+    for (auto* p : getParameters())
+        if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (p))
+            if (r->getParameterID() != params::detectLen) // a workflow choice, not part of a sound
+                v[r->getParameterID()] = r->convertFrom0to1 (r->getValue());
+    return v;
+}
+
+bool MagicEQProcessor::loadPreset (const juce::String& name)
+{
+    const auto* preset = presets.find (name);
+    ParamValues values;
+    if (preset == nullptr || ! presets.load (*preset, values))
+        return false;
+
+    undoManager.beginNewTransaction ("Load preset " + name);
+    for (auto* p : getParameters())
+    {
+        auto* r = dynamic_cast<juce::RangedAudioParameter*> (p);
+        if (r == nullptr || r->getParameterID() == params::detectLen)
+            continue;
+
+        // Anything the preset doesn't mention goes back to its default.
+        const auto it = values.find (r->getParameterID());
+        const float normalised = it != values.end() ? r->convertTo0to1 (it->second) : r->getDefaultValue();
+        r->beginChangeGesture();
+        r->setValueNotifyingHost (normalised);
+        r->endChangeGesture();
+    }
+
+    currentPreset = name;
+    presetSnapshot = captureValues();
+    return true;
+}
+
+bool MagicEQProcessor::saveCurrentAs (const juce::String& name)
+{
+    if (! presets.save (name, captureValues()))
+        return false;
+    currentPreset = name.trim();
+    presetSnapshot = captureValues();
+    return true;
+}
+
+bool MagicEQProcessor::isPresetModified() const
+{
+    const auto now = captureValues();
+    for (const auto& [id, value] : now)
+    {
+        const auto it = presetSnapshot.find (id);
+        if (it == presetSnapshot.end() || std::abs (it->second - value) > 1.0e-3f * juce::jmax (1.0f, std::abs (value)))
+            return true;
+    }
+    return false;
+}
+
+void MagicEQProcessor::stepPreset (int delta)
+{
+    const auto all = presets.getAll();
+    if (all.empty())
+        return;
+
+    int index = 0;
+    for (int i = 0; i < (int) all.size(); ++i)
+        if (all[(size_t) i].name == currentPreset) { index = i; break; }
+
+    index = (index + delta + (int) all.size()) % (int) all.size();
+    loadPreset (all[(size_t) index].name);
+}
+
 void MagicEQProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    if (auto xml = apvts.copyState().createXml())
+    auto state = apvts.copyState();
+    state.setProperty ("preset", currentPreset, nullptr);
+    if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
 
@@ -419,7 +498,25 @@ void MagicEQProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (apvts.state.getType()))
-            apvts.replaceState (juce::ValueTree::fromXml (*xml));
+        {
+            auto state = juce::ValueTree::fromXml (*xml);
+            currentPreset = state.getProperty ("preset", "Init (Flat)").toString();
+            state.removeProperty ("preset", nullptr);
+            apvts.replaceState (state);
+
+            // "Modified" compares against the named preset if it still exists, otherwise against the session.
+            presetSnapshot = captureValues();
+            ParamValues values;
+            if (const auto* preset = presets.find (currentPreset); preset != nullptr && presets.load (*preset, values))
+            {
+                for (auto& [id, v] : presetSnapshot)
+                {
+                    const auto it = values.find (id);
+                    if (it != values.end()) v = it->second;
+                    else if (auto* r = apvts.getParameter (id)) v = r->convertFrom0to1 (r->getDefaultValue());
+                }
+            }
+        }
 }
 
 juce::AudioProcessorEditor* MagicEQProcessor::createEditor()
