@@ -16,6 +16,7 @@ struct MatchResult
     GridCurve target {};             // the selected style's tone curve
     GridCurve correction {};         // the EQ curve Detect was aiming for
     GridCurve achieved {};           // what the chosen bands actually do
+    float voiceLowestHz = 0.0f;      // where the voice's own low end fades out (sets the low cut)
     bool valid = false;
 };
 

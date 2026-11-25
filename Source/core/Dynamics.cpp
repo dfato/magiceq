@@ -62,12 +62,21 @@ DynamicsFit DynamicsFitter::fit (const std::vector<SpectrumAccumulator::FrameLev
     // ... then adapt it to this vocal.
     // A very dynamic performance (big gap between soft and loud lines) needs firmer control;
     // one that is already even (or already compressed) needs less.
+    // This scales smoothly with the measured gap (13 dB is "typical"), so no two performances get the
+    // same ratio and amount unless they really are equally dynamic.
     const float range = p.rangeDb();
-    if (range > 18.0f)      { ratio *= 1.25f; targetGr *= 1.15f; }
-    else if (range < 8.0f)  { ratio *= 0.75f; targetGr *= 0.65f; }
+    const float dynamicFactor = std::clamp (1.0f + (range - 13.0f) / 20.0f, 0.65f, 1.45f);
+    ratio *= dynamicFactor;
+    targetGr *= std::clamp (1.0f + (range - 13.0f) / 25.0f, 0.6f, 1.3f);
 
-    // Spiky, transient-heavy vocals (hard consonants, shouting) get a slightly faster attack.
-    if (p.crestDb > 14.0f) attack *= 0.7f;
+    // Spiky, transient-heavy vocals (hard consonants, shouting) get a faster attack to catch the
+    // front of each word; smooth, sustained singing gets a slower one that keeps the natural attack.
+    // 10 dB of peak-to-RMS is "typical" for a vocal.
+    attack *= std::clamp (std::pow (2.0f, -(p.crestDb - 10.0f) / 6.0f), 0.5f, 1.6f);
+
+    // A tightly controlled performance can release a little faster; a very dynamic one slower,
+    // so the compressor doesn't pump between loud and soft words.
+    release *= std::clamp (1.0f + (range - 13.0f) / 30.0f, 0.75f, 1.35f);
 
     ratio = std::clamp (ratio, 1.5f, 10.0f);
     targetGr *= strength;

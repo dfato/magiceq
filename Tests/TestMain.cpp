@@ -234,6 +234,64 @@ static void testDetect()
     }
 }
 
+static std::vector<SpectrumAccumulator::FrameLevel> frames (float quietDb, float loudDb, float crestDb, int count);
+
+/** Dominic's question: is Detect really tailored to each recording, or does it just apply a fixed
+    curve per style? Same style, two very different vocals: the results must be clearly different,
+    and each must move in the direction its own recording needs. */
+static void testDetectIsTailored()
+{
+    std::puts ("Detect is tailored to each recording (same style, different vocals)");
+    const int style = 0; // both use Modern Pop
+
+    // Vocal A: deep voice, boxy (+6 dB at 400 Hz) and dull (-5 dB around 4 kHz), very dynamic and spiky.
+    auto curveA = [&] (double f) { return styleCurveAt (style, f) + bumpDb (f, 400, 6.0, 1.0) + bumpDb (f, 4000, -5.0, 1.2); };
+    // Vocal B: high voice with little low end, thin (-5 dB at 250 Hz) and harsh (+5 dB at 3.5 kHz), even and smooth.
+    auto curveB = [&] (double f)
+    {
+        const double rollOff = f < 220.0 ? -14.0 * std::log2 (220.0 / f) : 0.0;
+        return styleCurveAt (style, f) + rollOff + bumpDb (f, 250, -5.0, 1.0) + bumpDb (f, 3500, 5.0, 1.0);
+    };
+
+    auto a = detect (curveA, style, 1.0f, 41);
+    auto b = detect (curveB, style, 1.0f, 42);
+
+    auto describe = [] (const char* who, const MatchResult& m)
+    {
+        std::printf ("  %s: low cut %.0f Hz", who, m.bands.front().frequency);
+        for (size_t i = 1; i < m.bands.size(); ++i)
+            std::printf (" | %s %.0f Hz %+.1f dB", m.bands[i].type == BandType::HighShelf ? "shelf" : "bell",
+                         m.bands[i].frequency, m.bands[i].gainDb);
+        std::printf ("\n");
+    };
+    describe ("vocal A", a);
+    describe ("vocal B", b);
+
+    check (totalResponse (a.bands, 400) < -2.0, "boxy vocal A gets 400 Hz cut", totalResponse (a.bands, 400));
+    check (totalResponse (b.bands, 400) > totalResponse (a.bands, 400) + 3.0, "thin vocal B is not cut like A at 400 Hz", totalResponse (b.bands, 400));
+    check (totalResponse (a.bands, 4000) > 2.0, "dull vocal A gets presence boosted", totalResponse (a.bands, 4000));
+    check (totalResponse (b.bands, 3500) < -1.0, "harsh vocal B gets presence cut", totalResponse (b.bands, 3500));
+    check (b.bands.front().frequency > a.bands.front().frequency, "high voice B gets a higher low cut than deep voice A",
+           b.bands.front().frequency);
+
+    double biggestDifference = 0.0;
+    for (double f : { 250.0, 400.0, 1000.0, 2500.0, 4000.0, 8000.0 })
+        biggestDifference = std::max (biggestDifference, std::abs (totalResponse (a.bands, f) - totalResponse (b.bands, f)));
+    check (biggestDifference > 5.0, "the two EQ curves differ by more than 5 dB somewhere", biggestDifference);
+
+    // Compressor: dynamic, spiky, quieter recording vs. even, smooth, louder one.
+    auto ca = DynamicsFitter::fit (frames (-36.0f, -14.0f, 15.0f, 400), style, 1.0f);
+    auto cb = DynamicsFitter::fit (frames (-16.0f, -10.0f, 7.0f, 400), style, 1.0f);
+    std::printf ("  vocal A comp: threshold %.1f dB, ratio %.1f:1, attack %.1f ms, release %.0f ms, makeup %.1f dB\n",
+                 ca.comp.thresholdDb, ca.comp.ratio, ca.comp.attackMs, ca.comp.releaseMs, ca.comp.makeupDb);
+    std::printf ("  vocal B comp: threshold %.1f dB, ratio %.1f:1, attack %.1f ms, release %.0f ms, makeup %.1f dB\n",
+                 cb.comp.thresholdDb, cb.comp.ratio, cb.comp.attackMs, cb.comp.releaseMs, cb.comp.makeupDb);
+    check (std::abs (ca.comp.thresholdDb - cb.comp.thresholdDb) > 3.0f, "thresholds follow each recording's level");
+    check (ca.comp.ratio > cb.comp.ratio, "the more dynamic vocal gets a firmer ratio");
+    check (ca.comp.attackMs < cb.comp.attackMs, "the spikier vocal gets a faster attack");
+    check (std::abs (ca.comp.releaseMs - cb.comp.releaseMs) > 5.0f, "release adapts to the performance");
+}
+
 static void testCompressor()
 {
     std::puts ("Compressor");
@@ -396,6 +454,7 @@ int main()
     testDetect();
     testCompressor();
     testDynamicsFit();
+    testDetectIsTailored();
     testLimiter();
 
     std::printf ("\n%d checks, %d failed\n", checks, failures);
