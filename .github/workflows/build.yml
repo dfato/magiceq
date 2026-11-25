@@ -1,5 +1,5 @@
-# Builds MagicEQ for Mac and Windows, runs the automated tests, and attaches
-# ready-to-install plugins to each run (see the "Artifacts" section of a run's page).
+# Builds MagicEQ for Windows, runs the automated tests, and attaches
+# a ready-to-install plugin to each run (see the "Artifacts" section of a run's page).
 name: Build
 
 on:
@@ -13,38 +13,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  mac:
-    name: macOS (VST3 + AU, Apple Silicon + Intel)
-    runs-on: macos-14
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMAGICEQ_COPY_AFTER_BUILD=OFF
-
-      - name: Build
-        run: cmake --build build --config Release --parallel 4 --target MagicEQ_VST3 MagicEQ_AU MagicEQ_Standalone MagicEQTests
-
-      - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
-
-      - name: Package
-        run: |
-          ART=build/MagicEQ_artefacts/Release
-          mkdir -p dist
-          # Ad-hoc sign so macOS will load the plugins on Apple Silicon.
-          codesign --force --deep -s - "$ART/VST3/MagicEQ.vst3"
-          codesign --force --deep -s - "$ART/AU/MagicEQ.component"
-          codesign --force --deep -s - "$ART/Standalone/MagicEQ.app"
-          cp -R "$ART/VST3/MagicEQ.vst3" "$ART/AU/MagicEQ.component" "$ART/Standalone/MagicEQ.app" dist/
-          cp docs/INSTALL-mac.txt dist/
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: MagicEQ-mac
-          path: dist
-
   windows:
     name: Windows (VST3)
     runs-on: windows-latest
@@ -70,7 +38,7 @@ jobs:
           cp "$ART/Standalone/MagicEQ.exe" dist/
           cp docs/INSTALL-windows.txt dist/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: MagicEQ-windows
           path: dist

@@ -36,11 +36,12 @@ guesses waiting for a human ear: see [docs/STYLE_CURVES.md](docs/STYLE_CURVES.md
 
 ### Easiest: download one (no tools needed)
 
-Every pull request and every change to `main` builds MagicEQ for Mac and Windows automatically.
+Every pull request and every change to `main` builds MagicEQ for Windows automatically. (Mac builds are
+turned off for now; you can still build for Mac yourself with the steps below.)
 
 1. Open the repository's **Actions** tab on GitHub and click the latest green **Build** run.
-2. Scroll to **Artifacts** and download **MagicEQ-mac** or **MagicEQ-windows**.
-3. Unzip it and follow the `INSTALL-mac.txt` or `INSTALL-windows.txt` inside.
+2. Scroll to **Artifacts** and download **MagicEQ-windows**.
+3. Unzip it and follow the `INSTALL-windows.txt` inside.
 
 ### Build it yourself
 
