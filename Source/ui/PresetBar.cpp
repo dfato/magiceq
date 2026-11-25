@@ -10,6 +10,9 @@ namespace
 {
     const String starOn  = String::fromUTF8 ("\xe2\x98\x85"); // ★
     const String starOff = String::fromUTF8 ("\xe2\x98\x86"); // ☆
+
+    // Menu item ids for the actions (presets use 1..N). At namespace scope so lambdas can use them on every compiler.
+    constexpr int saveId = 10000, deleteId = 10001, folderId = 10002;
 }
 
 PresetBar::PresetBar (MagicEQProcessor& p) : processor (p)
@@ -89,7 +92,6 @@ void PresetBar::showMenu()
     if (! anyUser)
         menu.addItem (-1, "(none yet: press Save)", false);
 
-    constexpr int saveId = 10000, deleteId = 10001, folderId = 10002;
     menu.addSeparator();
     menu.addItem (saveId, "Save as new preset...");
     const auto* currentPreset = pm.find (current);
