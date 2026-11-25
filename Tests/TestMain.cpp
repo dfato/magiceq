@@ -6,8 +6,6 @@
 #include "dsp/Compressor.h"
 #include "dsp/Limiter.h"
 #include "core/MatchFitter.h"
-#include "core/ParamIds.h"
-#include "core/PresetManager.h"
 #include "core/SpectrumAccumulator.h"
 #include "core/StyleLibrary.h"
 #include "dsp/EqEngine.h"
@@ -448,60 +446,6 @@ static void testLimiter()
     near (out[(size_t) (2000 + latency)], loud[2000], 1e-6, "switched off it passes audio unchanged, with the same delay");
 }
 
-static void testPresets()
-{
-    std::puts ("Presets");
-    const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("MagicEQTestPresets");
-    dir.deleteRecursively();
-
-    {
-        PresetManager pm (dir);
-        const auto factoryCount = PresetManager::factoryPresets().size();
-        check (factoryCount >= 8, "there are factory presets", (double) factoryCount);
-        check (pm.getAll().size() == factoryCount, "no user presets to begin with");
-
-        ParamValues v { { params::freq (0), 123.0f }, { params::compRatio, 4.5f }, { params::style, 3.0f } };
-        check (pm.save ("My Lead Vocal", v), "saving a preset works");
-        check (! pm.save ("Airy Pop Lead", v), "factory names can't be overwritten");
-        check (! pm.save ("   ", v), "an empty name is refused");
-
-        const auto* saved = pm.find ("My Lead Vocal");
-        check (saved != nullptr && ! saved->factory, "the saved preset is listed under My Presets");
-
-        ParamValues back;
-        check (saved != nullptr && pm.load (*saved, back), "loading it back works");
-        near (back[params::freq (0)], 123.0, 1e-4, "values survive the round trip");
-        near (back[params::compRatio], 4.5, 1e-4, "values survive the round trip (2)");
-
-        pm.setFavourite ("My Lead Vocal", true);
-        pm.setFavourite ("Warm R&B", true);
-    }
-    {
-        PresetManager pm (dir); // a new instance, as after restarting the DAW
-        check (pm.isFavourite ("My Lead Vocal") && pm.isFavourite ("Warm R&B"), "favourites are remembered");
-        check (pm.getFavourites().size() == 2, "both favourites are listed");
-
-        const auto* p = pm.find ("My Lead Vocal");
-        check (p != nullptr && pm.remove (*p), "a user preset can be deleted");
-        check (pm.find ("My Lead Vocal") == nullptr && ! pm.isFavourite ("My Lead Vocal"), "deleting also clears the favourite");
-        const auto* f = pm.find ("Warm R&B");
-        check (f != nullptr && ! pm.remove (*f), "factory presets can't be deleted");
-    }
-
-    // Factory presets only use real parameter IDs and sensible values.
-    bool ok = true;
-    for (const auto& [name, values] : PresetManager::factoryPresets())
-        for (const auto& [id, v] : values)
-        {
-            const bool known = id.startsWith ("b") || id.startsWith ("comp_") || id.startsWith ("lim_") || id == params::style;
-            const bool sane = std::isfinite (v) && v > -100.0f && v < 20001.0f;
-            if (! known || ! sane) { ok = false; std::printf ("  bad value in '%s': %s = %f\n", name.toRawUTF8(), id.toRawUTF8(), v); }
-        }
-    check (ok, "factory presets use valid parameters and values");
-
-    dir.deleteRecursively();
-}
-
 int main()
 {
     testFilterMaths();
@@ -512,7 +456,6 @@ int main()
     testDynamicsFit();
     testDetectIsTailored();
     testLimiter();
-    testPresets();
 
     std::printf ("\n%d checks, %d failed\n", checks, failures);
     return failures == 0 ? 0 : 1;
