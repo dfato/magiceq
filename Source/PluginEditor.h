@@ -4,6 +4,7 @@
 
 #include "PluginProcessor.h"
 #include "ui/BandPanel.h"
+#include "ui/CompPanel.h"
 #include "ui/EqGraph.h"
 #include "ui/RainLookAndFeel.h"
 
@@ -29,6 +30,7 @@ private:
 
     magiceq::ui::EqGraph graph;
     magiceq::ui::BandPanel bandPanel;
+    magiceq::ui::CompPanel compPanel;
 
     juce::ComboBox styleBox, lengthBox;
     juce::Slider strength, output;

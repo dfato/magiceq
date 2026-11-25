@@ -2,6 +2,8 @@
 // Run: ctest --test-dir build -C Release --output-on-failure   (or run the MagicEQTests program directly)
 
 #include "core/Biquad.h"
+#include "core/Dynamics.h"
+#include "dsp/Compressor.h"
 #include "core/MatchFitter.h"
 #include "core/SpectrumAccumulator.h"
 #include "core/StyleLibrary.h"
@@ -231,12 +233,98 @@ static void testDetect()
     }
 }
 
+static void testCompressor()
+{
+    std::puts ("Compressor");
+    near (compressorGainDb (-30.0f, -18.0f, 4.0f, 0.0f), 0.0, 1e-6, "no gain change below the threshold");
+    near (compressorGainDb (-6.0f, -18.0f, 4.0f, 0.0f), -9.0, 1e-4, "12 dB over at 4:1 gives 9 dB of reduction");
+    near (compressorGainDb (-18.0f, -18.0f, 4.0f, 6.0f), -0.75 * 0.75, 1e-4, "soft knee eases in at the threshold");
+    near (compressorGainDb (-24.0f, -18.0f, 4.0f, 6.0f), 0.0, 1e-4, "soft knee ends half a knee below the threshold");
+
+    auto run = [] (const CompSettings& c, float amplitude)
+    {
+        Compressor comp;
+        comp.setSettings (c);
+        comp.prepare (fs);
+        const int n = 48000;
+        std::vector<float> l ((size_t) n), r ((size_t) n);
+        for (int i = 0; i < n; ++i)
+            l[(size_t) i] = r[(size_t) i] = amplitude * (float) std::sin (2.0 * 3.14159265358979 * 220.0 * i / fs);
+        float maxGr = 0.0f;
+        for (int start = 0; start < n; start += 256)
+        {
+            float* block[] = { l.data() + start, r.data() + start };
+            maxGr = std::max (maxGr, comp.process (block, 2, std::min (256, n - start)));
+        }
+        float peak = 0.0f;
+        for (int i = n * 3 / 4; i < n; ++i) peak = std::max (peak, std::abs (l[(size_t) i]));
+        return std::pair<float, float> { 20.0f * std::log10 (peak), maxGr };
+    };
+
+    CompSettings c;
+    c.enabled = true; c.thresholdDb = -18.0f; c.ratio = 4.0f; c.kneeDb = 0.0f; c.attackMs = 1.0f; c.releaseMs = 100.0f;
+    auto [outDb, gr] = run (c, 0.5f); // -6 dBFS peaks
+    near (outDb, -15.0, 1.0, "a -6 dBFS sine comes out near -15 dBFS (9 dB of reduction)");
+    near (gr, 9.0, 1.0, "the meter reports about 9 dB of reduction");
+
+    c.makeupDb = 6.0f;
+    near (run (c, 0.5f).first, -9.0, 1.0, "makeup gain adds back 6 dB");
+
+    c.makeupDb = 0.0f;
+    c.mix = 0.0f;
+    near (run (c, 0.5f).first, -6.0, 0.05, "mix at 0% passes the signal untouched");
+
+    c.mix = 1.0f;
+    c.enabled = false;
+    near (run (c, 0.5f).first, -6.0, 0.05, "a switched-off compressor passes the signal untouched");
+}
+
+static std::vector<SpectrumAccumulator::FrameLevel> frames (float quietDb, float loudDb, float crestDb, int count)
+{
+    std::vector<SpectrumAccumulator::FrameLevel> f;
+    for (int i = 0; i < count; ++i)
+    {
+        const float rms = quietDb + (loudDb - quietDb) * (float) i / (float) (count - 1);
+        f.push_back ({ rms, rms + crestDb });
+    }
+    return f;
+}
+
+static void testDynamicsFit()
+{
+    std::puts ("Detect compressor settings");
+    const int style = 0; // Modern Pop: about 6 dB on loud lines
+    const auto& st = StyleLibrary::get (style);
+
+    auto fit = DynamicsFitter::fit (frames (-34.0f, -16.0f, 10.0f, 400), style, 1.0f);
+    check (fit.comp.enabled, "Detect switches the compressor on");
+    near (fit.expectedLoudGrDb, st.compTargetGainReductionDb, 1.5, "loud lines get about the style's target reduction");
+    check (fit.comp.makeupDb > 0.0f && fit.comp.makeupDb < fit.expectedLoudGrDb, "makeup gives back some, not all, of the reduction", fit.comp.makeupDb);
+    near (fit.comp.attackMs, st.compAttackMs, 0.01, "attack comes from the style");
+
+    // Louder recording, same performance: settings should move with the level, not change character.
+    auto louder = DynamicsFitter::fit (frames (-24.0f, -6.0f, 10.0f, 400), style, 1.0f);
+    near (louder.comp.thresholdDb - fit.comp.thresholdDb, 10.0, 0.6, "a 10 dB louder recording gets a 10 dB higher threshold");
+
+    // An already-flat (or already compressed) vocal gets a gentler setting.
+    auto flat = DynamicsFitter::fit (frames (-20.0f, -15.0f, 6.0f, 400), style, 1.0f);
+    check (flat.comp.ratio < fit.comp.ratio, "an even vocal gets a lower ratio", flat.comp.ratio);
+    check (flat.expectedLoudGrDb < fit.expectedLoudGrDb, "an even vocal gets less reduction", flat.expectedLoudGrDb);
+
+    auto none = DynamicsFitter::fit (frames (-34.0f, -16.0f, 10.0f, 400), style, 0.0f);
+    check (! none.comp.enabled, "Strength 0% leaves the compressor off");
+
+    check (! DynamicsFitter::fit ({}, style, 1.0f).profile.valid, "no audio, no compressor decision");
+}
+
 int main()
 {
     testFilterMaths();
     testEngine();
     testGate();
     testDetect();
+    testCompressor();
+    testDynamicsFit();
 
     std::printf ("\n%d checks, %d failed\n", checks, failures);
     return failures == 0 ? 0 : 1;

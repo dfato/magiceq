@@ -24,6 +24,15 @@ inline const juce::String style     = "style";
 inline const juce::String strength  = "strength";
 inline const juce::String detectLen = "detect_len";
 
+inline const juce::String compOn      = "comp_on";
+inline const juce::String compThresh  = "comp_threshold";
+inline const juce::String compRatio   = "comp_ratio";
+inline const juce::String compAttack  = "comp_attack";
+inline const juce::String compRelease = "comp_release";
+inline const juce::String compKnee    = "comp_knee";
+inline const juce::String compMakeup  = "comp_makeup";
+inline const juce::String compMix     = "comp_mix";
+
 inline const juce::StringArray typeNames { "Bell", "Low Shelf", "High Shelf", "Low Cut", "High Cut", "Notch" };
 inline const juce::StringArray slopeNames { "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct" };
 inline const juce::StringArray detectLengthNames { "10 s", "20 s", "30 s" };
@@ -74,6 +83,37 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
                                                                 logRange (0.1f, 18.0f), 0.707f, qAttr));
         group->addChild (std::make_unique<AudioParameterChoice> (ParameterID { slope (b), 1 }, prefix + "Slope", slopeNames, 1));
         layout.add (std::move (group));
+    }
+
+    {
+        auto ms = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int)
+        {
+            return v < 10.0f ? String (v, 1) + " ms" : String (roundToInt (v)) + " ms";
+        });
+        auto plainDb = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (v, 1) + " dB"; });
+        auto ratioAttr = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int)
+        {
+            return String (v, v < 10.0f ? 1 : 0) + ":1";
+        });
+
+        auto comp = std::make_unique<AudioProcessorParameterGroup> ("comp", "Compressor", "|");
+        comp->addChild (std::make_unique<AudioParameterBool>  (ParameterID { compOn, 1 }, "Comp On", false));
+        comp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { compThresh, 1 }, "Comp Threshold",
+                                                               NormalisableRange<float> (-60.0f, 0.0f, 0.1f), -18.0f, db));
+        comp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { compRatio, 1 }, "Comp Ratio",
+                                                               logRange (1.0f, 20.0f), 3.0f, ratioAttr));
+        comp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { compAttack, 1 }, "Comp Attack",
+                                                               logRange (0.1f, 100.0f), 10.0f, ms));
+        comp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { compRelease, 1 }, "Comp Release",
+                                                               logRange (10.0f, 1000.0f), 100.0f, ms));
+        comp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { compKnee, 1 }, "Comp Knee",
+                                                               NormalisableRange<float> (0.0f, 24.0f, 0.1f), 6.0f, plainDb));
+        comp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { compMakeup, 1 }, "Comp Makeup",
+                                                               NormalisableRange<float> (-12.0f, 24.0f, 0.1f), 0.0f, db));
+        comp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { compMix, 1 }, "Comp Mix",
+                                                               NormalisableRange<float> (0.0f, 100.0f, 1.0f), 100.0f,
+                                                               AudioParameterFloatAttributes().withLabel ("%")));
+        layout.add (std::move (comp));
     }
 
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { output, 1 }, "Output",

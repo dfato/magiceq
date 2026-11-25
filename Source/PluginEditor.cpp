@@ -5,12 +5,13 @@ using namespace magiceq::ui;
 using juce::String;
 
 MagicEQEditor::MagicEQEditor (MagicEQProcessor& p)
-    : AudioProcessorEditor (&p), processor (p), graph (p), bandPanel (p)
+    : AudioProcessorEditor (&p), processor (p), graph (p), bandPanel (p), compPanel (p)
 {
     setLookAndFeel (&lnf);
 
     addAndMakeVisible (graph);
     addAndMakeVisible (bandPanel);
+    addAndMakeVisible (compPanel);
 
     graph.onBandSelected = [this] (int b) { bandPanel.setBand (b); };
     bandPanel.onBandChosen = [this] (int b) { graph.setSelectedBand (b); };
@@ -94,8 +95,8 @@ MagicEQEditor::MagicEQEditor (MagicEQProcessor& p)
         addAndMakeVisible (*b);
 
     setResizable (true, true);
-    setResizeLimits (980, 580, 1800, 1100);
-    setSize (1000, 640);
+    setResizeLimits (1040, 660, 1800, 1100);
+    setSize (1100, 700);
     setWantsKeyboardFocus (true);
 
     startTimerHz (30);
@@ -132,9 +133,11 @@ void MagicEQEditor::updateDetectUi()
     {
         const auto& m = processor.getLastMatch();
         const int toneBands = (int) m.bands.size() - 1;
-        doneMessage = "Done. Set a low cut plus " + String (toneBands) + " band" + (toneBands == 1 ? "" : "s") + " for "
+        const auto& d = processor.getLastDynamics();
+        doneMessage = "Done. Set a low cut plus " + String (toneBands) + " band" + (toneBands == 1 ? "" : "s")
+                    + (d.comp.enabled ? " and the compressor" : "") + " for "
                     + StyleLibrary::get ((int) processor.apvts.getRawParameterValue (params::style)->load()).name
-                    + ". Not right? Undo, or tweak any band.";
+                    + ". Not right? Undo, or tweak anything.";
     }
     lastState = state;
 
@@ -243,7 +246,10 @@ void MagicEQEditor::resized()
     status.setBounds (statusRow);
 
     r.reduce (12, 8);
-    bandPanel.setBounds (r.removeFromBottom (170));
+    auto bottom = r.removeFromBottom (210);
+    compPanel.setBounds (bottom.removeFromRight (juce::jmax (420, bottom.getWidth() * 2 / 5)));
+    bottom.removeFromRight (8);
+    bandPanel.setBounds (bottom);
     r.removeFromBottom (8);
     graph.setBounds (r);
 }
