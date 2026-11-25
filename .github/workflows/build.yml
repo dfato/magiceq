@@ -1,0 +1,76 @@
+# Builds MagicEQ for Mac and Windows, runs the automated tests, and attaches
+# ready-to-install plugins to each run (see the "Artifacts" section of a run's page).
+name: Build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mac:
+    name: macOS (VST3 + AU, Apple Silicon + Intel)
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMAGICEQ_COPY_AFTER_BUILD=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4 --target MagicEQ_VST3 MagicEQ_AU MagicEQ_Standalone MagicEQTests
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package
+        run: |
+          ART=build/MagicEQ_artefacts/Release
+          mkdir -p dist
+          # Ad-hoc sign so macOS will load the plugins on Apple Silicon.
+          codesign --force --deep -s - "$ART/VST3/MagicEQ.vst3"
+          codesign --force --deep -s - "$ART/AU/MagicEQ.component"
+          codesign --force --deep -s - "$ART/Standalone/MagicEQ.app"
+          cp -R "$ART/VST3/MagicEQ.vst3" "$ART/AU/MagicEQ.component" "$ART/Standalone/MagicEQ.app" dist/
+          cp docs/INSTALL-mac.txt dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MagicEQ-mac
+          path: dist
+
+  windows:
+    name: Windows (VST3)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DMAGICEQ_COPY_AFTER_BUILD=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4 --target MagicEQ_VST3 MagicEQ_Standalone MagicEQTests
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package
+        shell: bash
+        run: |
+          ART=build/MagicEQ_artefacts/Release
+          mkdir -p dist
+          cp -R "$ART/VST3/MagicEQ.vst3" dist/
+          cp "$ART/Standalone/MagicEQ.exe" dist/
+          cp docs/INSTALL-windows.txt dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MagicEQ-windows
+          path: dist
