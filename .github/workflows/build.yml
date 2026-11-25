@@ -18,7 +18,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMAGICEQ_COPY_AFTER_BUILD=OFF
@@ -50,10 +50,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Configure
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DMAGICEQ_COPY_AFTER_BUILD=OFF
+        run: cmake -S . -B build -A x64 -DMAGICEQ_COPY_AFTER_BUILD=OFF
 
       - name: Build
         run: cmake --build build --config Release --parallel 4 --target MagicEQ_VST3 MagicEQ_Standalone MagicEQTests

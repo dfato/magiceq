@@ -59,13 +59,13 @@ cmake --build build --config Release --parallel
 On a Mac the build copies `MagicEQ.component` (AU) and `MagicEQ.vst3` into
 `~/Library/Audio/Plug-Ins/` for you, so just restart your DAW.
 
-**Windows** (needs [Visual Studio 2022 Community](https://visualstudio.microsoft.com/vs/community/)
+**Windows** (needs [Visual Studio Community](https://visualstudio.microsoft.com/vs/community/) (2022 or newer)
 with "Desktop development with C++", and [CMake](https://cmake.org/download/)):
 
 ```bat
 git clone https://github.com/dfato/magiceq.git
 cd magiceq
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake -S . -B build -A x64
 cmake --build build --config Release --parallel
 ```
 
