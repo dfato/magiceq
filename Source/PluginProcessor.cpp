@@ -30,6 +30,11 @@ MagicEQProcessor::MagicEQProcessor()
     compParams.makeup    = apvts.getRawParameterValue (params::compMakeup);
     compParams.mix       = apvts.getRawParameterValue (params::compMix);
 
+    limOnParam       = apvts.getRawParameterValue (params::limOn);
+    limCeilingParam  = apvts.getRawParameterValue (params::limCeiling);
+    limReleaseParam  = apvts.getRawParameterValue (params::limRelease);
+    limTruePeakParam = apvts.getRawParameterValue (params::limTruePeak);
+
     startTimerHz (30);
 }
 
@@ -56,6 +61,10 @@ void MagicEQProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
     compressor.setSettings (getComp());
     compressor.prepare (sampleRate);
+
+    limiter.setSettings (getLimiter());
+    limiter.prepare (sampleRate);
+    setLatencySamples (limiter.getLatencySamples()); // ~1.2 ms of look-ahead, reported so the DAW compensates
 
     outputGain.reset (sampleRate, 0.02);
     outputGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputParam->load()));
@@ -93,6 +102,48 @@ CompSettings MagicEQProcessor::getComp() const
     return c;
 }
 
+LimiterSettings MagicEQProcessor::getLimiter() const
+{
+    LimiterSettings l;
+    l.enabled   = limOnParam->load() > 0.5f;
+    l.ceilingDb = limCeilingParam->load();
+    l.releaseMs = limReleaseParam->load();
+    l.truePeak  = limTruePeakParam->load() > 0.5f;
+    return l;
+}
+
+namespace
+{
+    void storeMax (std::atomic<float>& a, float v) noexcept
+    {
+        float prev = a.load (std::memory_order_relaxed);
+        while (v > prev && ! a.compare_exchange_weak (prev, v, std::memory_order_relaxed)) {}
+    }
+
+    void measure (const juce::AudioBuffer<float>& b, int numChannels, std::atomic<float>& peak, std::atomic<float>& rms) noexcept
+    {
+        float p = 0.0f, r = 0.0f;
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            p = juce::jmax (p, b.getMagnitude (ch, 0, b.getNumSamples()));
+            r = juce::jmax (r, b.getRMSLevel (ch, 0, b.getNumSamples()));
+        }
+        storeMax (peak, p);
+        storeMax (rms, r);
+    }
+}
+
+MagicEQProcessor::MeterReadings MagicEQProcessor::takeMeterReadings() noexcept
+{
+    MeterReadings m;
+    m.inPeak = inPeak.exchange (0.0f);
+    m.inRms = inRms.exchange (0.0f);
+    m.outPeak = outPeak.exchange (0.0f);
+    m.outRms = outRms.exchange (0.0f);
+    m.limiterGrDb = limiterGr.exchange (0.0f);
+    return m;
+}
+
 void MagicEQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
@@ -122,6 +173,8 @@ void MagicEQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         }
     };
 
+    measure (buffer, numChannels, inPeak, inRms);
+
     // Detect listens to the vocal before MagicEQ changes it.
     if (captureForDetect.load (std::memory_order_relaxed))
     {
@@ -137,8 +190,7 @@ void MagicEQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     // Compressor after the EQ, so the EQ's tone shaping is what gets compressed (the usual vocal chain order).
     compressor.setSettings (getComp());
     const float gr = compressor.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
-    float prev = gainReductionDb.load (std::memory_order_relaxed);
-    while (gr > prev && ! gainReductionDb.compare_exchange_weak (prev, gr, std::memory_order_relaxed)) {}
+    storeMax (gainReductionDb, gr);
 
     outputGain.setTargetValue (juce::Decibels::decibelsToGain (outputParam->load()));
     if (outputGain.isSmoothing())
@@ -154,6 +206,12 @@ void MagicEQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     {
         buffer.applyGain (outputGain.getTargetValue());
     }
+
+    // Limiter last, after the output gain, so its ceiling really is the final level.
+    limiter.setSettings (getLimiter());
+    storeMax (limiterGr, limiter.process (buffer.getArrayOfWritePointers(), numChannels, numSamples));
+
+    measure (buffer, numChannels, outPeak, outRms);
 
     mixToMono();
     analyzerFifo.push (monoScratch.data(), numSamples);

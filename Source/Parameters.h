@@ -33,6 +33,11 @@ inline const juce::String compKnee    = "comp_knee";
 inline const juce::String compMakeup  = "comp_makeup";
 inline const juce::String compMix     = "comp_mix";
 
+inline const juce::String limOn       = "lim_on";
+inline const juce::String limCeiling  = "lim_ceiling";
+inline const juce::String limRelease  = "lim_release";
+inline const juce::String limTruePeak = "lim_truepeak";
+
 inline const juce::StringArray typeNames { "Bell", "Low Shelf", "High Shelf", "Low Cut", "High Cut", "Notch" };
 inline const juce::StringArray slopeNames { "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct" };
 inline const juce::StringArray detectLengthNames { "10 s", "20 s", "30 s" };
@@ -114,6 +119,21 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
                                                                NormalisableRange<float> (0.0f, 100.0f, 1.0f), 100.0f,
                                                                AudioParameterFloatAttributes().withLabel ("%")));
         layout.add (std::move (comp));
+    }
+
+    {
+        auto lim = std::make_unique<AudioProcessorParameterGroup> ("lim", "Limiter", "|");
+        lim->addChild (std::make_unique<AudioParameterBool>  (ParameterID { limOn, 1 }, "Limiter On", true));
+        lim->addChild (std::make_unique<AudioParameterFloat> (ParameterID { limCeiling, 1 }, "Limiter Ceiling",
+                                                              NormalisableRange<float> (-12.0f, 0.0f, 0.1f), -1.0f,
+                                                              AudioParameterFloatAttributes().withStringFromValueFunction (
+                                                                  [] (float v, int) { return String (v, 1) + " dB"; })));
+        lim->addChild (std::make_unique<AudioParameterFloat> (ParameterID { limRelease, 1 }, "Limiter Release",
+                                                              logRange (1.0f, 1000.0f), 50.0f,
+                                                              AudioParameterFloatAttributes().withStringFromValueFunction (
+                                                                  [] (float v, int) { return v < 10.0f ? String (v, 1) + " ms" : String (roundToInt (v)) + " ms"; })));
+        lim->addChild (std::make_unique<AudioParameterBool>  (ParameterID { limTruePeak, 1 }, "Limiter True Peak", true));
+        layout.add (std::move (lim));
     }
 
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { output, 1 }, "Output",

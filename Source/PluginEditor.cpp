@@ -5,13 +5,16 @@ using namespace magiceq::ui;
 using juce::String;
 
 MagicEQEditor::MagicEQEditor (MagicEQProcessor& p)
-    : AudioProcessorEditor (&p), processor (p), graph (p), bandPanel (p), compPanel (p)
+    : AudioProcessorEditor (&p), processor (p), graph (p), bandPanel (p), compPanel (p), meters (p),
+      limiterPanel (p, [this] { return meters.getLimiterGrDb(); })
 {
     setLookAndFeel (&lnf);
 
     addAndMakeVisible (graph);
     addAndMakeVisible (bandPanel);
     addAndMakeVisible (compPanel);
+    addAndMakeVisible (meters);
+    addAndMakeVisible (limiterPanel);
 
     graph.onBandSelected = [this] (int b) { bandPanel.setBand (b); };
     bandPanel.onBandChosen = [this] (int b) { graph.setSelectedBand (b); };
@@ -95,8 +98,8 @@ MagicEQEditor::MagicEQEditor (MagicEQProcessor& p)
         addAndMakeVisible (*b);
 
     setResizable (true, true);
-    setResizeLimits (1040, 660, 1800, 1100);
-    setSize (1100, 700);
+    setResizeLimits (1160, 680, 1800, 1100);
+    setSize (1240, 740);
     setWantsKeyboardFocus (true);
 
     startTimerHz (30);
@@ -247,9 +250,13 @@ void MagicEQEditor::resized()
 
     r.reduce (12, 8);
     auto bottom = r.removeFromBottom (210);
-    compPanel.setBounds (bottom.removeFromRight (juce::jmax (420, bottom.getWidth() * 2 / 5)));
+    limiterPanel.setBounds (bottom.removeFromRight (190));
+    bottom.removeFromRight (8);
+    compPanel.setBounds (bottom.removeFromRight (juce::jmax (400, bottom.getWidth() * 9 / 20)));
     bottom.removeFromRight (8);
     bandPanel.setBounds (bottom);
     r.removeFromBottom (8);
+    meters.setBounds (r.removeFromRight (74));
+    r.removeFromRight (8);
     graph.setBounds (r);
 }

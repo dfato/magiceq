@@ -4,6 +4,7 @@
 #include "core/Biquad.h"
 #include "core/Dynamics.h"
 #include "dsp/Compressor.h"
+#include "dsp/Limiter.h"
 #include "core/MatchFitter.h"
 #include "core/SpectrumAccumulator.h"
 #include "core/StyleLibrary.h"
@@ -317,6 +318,76 @@ static void testDynamicsFit()
     check (! DynamicsFitter::fit ({}, style, 1.0f).profile.valid, "no audio, no compressor decision");
 }
 
+static void testLimiter()
+{
+    std::puts ("Limiter");
+
+    // A sine at a quarter of the sample rate, phased so every sample misses the crest:
+    // samples peak at 0.707 but the real (true) peak is 1.0.
+    {
+        std::vector<float> x (4800);
+        for (size_t i = 0; i < x.size(); ++i)
+            x[i] = (float) std::sin (2.0 * 3.14159265358979 * 0.25 * (double) i + 3.14159265358979 / 4.0);
+        near (Limiter::measureTruePeak (x.data(), (int) x.size()), 1.0, 0.03, "true-peak meter finds the peak between samples");
+    }
+
+    auto run = [] (const LimiterSettings& s, const std::vector<float>& input, std::vector<float>& output)
+    {
+        Limiter lim;
+        lim.setSettings (s);
+        lim.prepare (fs);
+        lim.setSettings (s);
+        output = input;
+        std::vector<float> r = input;
+        float maxGr = 0.0f;
+        for (size_t start = 0; start < output.size(); start += 333)
+        {
+            const int n = (int) std::min<size_t> (333, output.size() - start);
+            float* ch[] = { output.data() + start, r.data() + start };
+            maxGr = std::max (maxGr, lim.process (ch, 2, n));
+        }
+        return std::pair<int, float> { lim.getLatencySamples(), maxGr };
+    };
+
+    // Loud, spiky material: noise bursts and a sine, peaking about 8 dB over the ceiling.
+    std::mt19937 rng (5);
+    std::normal_distribution<float> noise (0.0f, 0.35f);
+    std::vector<float> loud (48000);
+    for (size_t i = 0; i < loud.size(); ++i)
+    {
+        const double t = (double) i / fs;
+        const float burst = std::fmod (t, 0.25) < 0.05 ? noise (rng) : 0.0f;
+        loud[i] = 0.9f * (float) std::sin (2.0 * 3.14159265358979 * 3100.0 * t) + burst;
+    }
+
+    LimiterSettings s;
+    s.ceilingDb = -1.0f;
+    s.truePeak = false;
+    std::vector<float> out;
+    auto [latency, gr] = run (s, loud, out);
+    float peak = 0.0f;
+    for (float v : out) peak = std::max (peak, std::abs (v));
+    check (20.0 * std::log10 (peak) <= -1.0 + 0.01, "sample-peak mode never goes over the ceiling", 20.0 * std::log10 (peak));
+    check (gr > 3.0f, "the limiter reports its gain reduction", gr);
+
+    s.truePeak = true;
+    run (s, loud, out);
+    const float tp = Limiter::measureTruePeak (out.data(), (int) out.size());
+    check (20.0 * std::log10 (tp) <= -1.0 + 0.3, "true-peak mode keeps between-sample peaks at the ceiling", 20.0 * std::log10 (tp));
+
+    // Quiet material passes untouched, just delayed by the reported latency.
+    std::vector<float> quiet (4800, 0.0f);
+    quiet[100] = 0.5f;
+    run (s, quiet, out);
+    check (latency > 0 && latency < 100, "latency is small (about 1.2 ms)", latency);
+    near (out[(size_t) (100 + latency)], 0.5, 1e-6, "below the ceiling the signal is untouched, only delayed by the reported latency");
+
+    // Switched off: same delay (so the DAW's timing doesn't jump), no limiting.
+    s.enabled = false;
+    run (s, loud, out);
+    near (out[(size_t) (2000 + latency)], loud[2000], 1e-6, "switched off it passes audio unchanged, with the same delay");
+}
+
 int main()
 {
     testFilterMaths();
@@ -325,6 +396,7 @@ int main()
     testDetect();
     testCompressor();
     testDynamicsFit();
+    testLimiter();
 
     std::printf ("\n%d checks, %d failed\n", checks, failures);
     return failures == 0 ? 0 : 1;

@@ -4,8 +4,8 @@ A vocal EQ that listens to your voice and tunes itself toward the sound of the g
 
 ![MagicEQ after a Detect run](docs/screenshot.png)
 
-**Status: stage 2 prototype.** The EQ, spectrum analyzer, compressor and Detect work. The limiter
-and a fuller preset browser come next (see [Roadmap](#roadmap)). The style curves are first-draft
+**Status: stage 3 prototype.** The EQ, spectrum analyzer, compressor, limiter, meters and Detect
+work. A preset browser comes next (see [Roadmap](#roadmap)). The style curves are first-draft
 guesses waiting for a human ear: see [docs/STYLE_CURVES.md](docs/STYLE_CURVES.md).
 
 ## What it does
@@ -21,9 +21,14 @@ guesses waiting for a human ear: see [docs/STYLE_CURVES.md](docs/STYLE_CURVES.md
   Notch, each with frequency, gain and Q.
 - **Compressor** after the EQ: threshold, ratio, attack, release, knee, makeup, mix (for parallel
   compression) and a gain-reduction meter. Detect sets all of it.
+- **Limiter**, last in the chain: ceiling, release and a true-peak mode that also catches peaks
+  between samples. It looks ahead about 1 ms so it never clips, and reports that small delay to your
+  DAW so tracks stay in time.
+- **Input and output meters** with peak hold and a clip light (click a meter to reset it).
 - **Live spectrum analyzer** behind the EQ curve, plus a dashed line showing what Detect was aiming for.
 - **Undo / Redo** (Cmd/Ctrl+Z), **A/B compare**, output gain.
-- **Zero latency**, so it is safe to use while tracking.
+- **Tracking-friendly latency**: the EQ and compressor add none; the limiter's look-ahead adds about
+  1.2 ms, which your DAW compensates for automatically.
 
 ### Using the graph
 
@@ -118,6 +123,7 @@ Source/
     Dynamics.*        Compressor curve + how Detect picks compressor settings
   dsp/EqEngine.h    The real-time 12-band EQ with click-free parameter glides
   dsp/Compressor.h  The real-time compressor
+  dsp/Limiter.h     Look-ahead, true-peak limiter
   Parameters.h      Every automatable parameter
   PluginProcessor.* Audio processing, Detect state machine, A/B, saving
   PluginEditor.*    Main window
@@ -130,8 +136,7 @@ docs/               Style curve review, install notes, screenshot
 ## Roadmap
 
 - ~~Stage 2: compressor that Detect also sets~~ (done)
-- **Stage 3:** limiter with ceiling, release and true-peak mode, placed last in the chain; input and
-  output meters.
+- ~~Stage 3: limiter and meters~~ (done)
 - **Stage 4:** preset browser (save your own, favourites), per-style descriptions in the UI, and tuning
   the style curves from real reference vocals.
 - **Release prep:** code-signing and notarization (Mac), signed installer (Windows), AAX for Pro Tools

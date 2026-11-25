@@ -78,7 +78,7 @@ int main (int argc, char** argv)
     }
 
     std::unique_ptr<juce::AudioProcessorEditor> editor (proc.createEditor());
-    editor->setSize (1100, 700);
+    editor->setSize (1240, 740);
     if (auto* e = dynamic_cast<MagicEQEditor*> (editor.get()))
         e->selectBand (2);
 

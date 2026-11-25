@@ -8,6 +8,7 @@
 #include "core/Dynamics.h"
 #include "dsp/Compressor.h"
 #include "dsp/EqEngine.h"
+#include "dsp/Limiter.h"
 
 /** A lock-free single-producer/single-consumer sample queue (audio thread -> UI/analysis). */
 class SampleFifo
@@ -91,6 +92,13 @@ public:
     /** Largest compressor gain reduction since the last call, in dB (UI meter; message thread). */
     float takeGainReductionDb() noexcept { return gainReductionDb.exchange (0.0f); }
 
+    /** Current limiter settings, read from the parameters. */
+    magiceq::LimiterSettings getLimiter() const;
+
+    /** Meter readings since the last call (message thread). Peaks are linear, limiter GR in dB. */
+    struct MeterReadings { float inPeak = 0, inRms = 0, outPeak = 0, outRms = 0, limiterGrDb = 0; };
+    MeterReadings takeMeterReadings() noexcept;
+
     // ----- A/B compare (message thread only) -----
     void switchAB();
     bool isOnB() const noexcept { return onB; }
@@ -130,6 +138,9 @@ private:
     } compParams;
 
     magiceq::Compressor compressor;
+    magiceq::Limiter limiter;
+    std::atomic<float>* limOnParam = nullptr, *limCeilingParam = nullptr, *limReleaseParam = nullptr, *limTruePeakParam = nullptr;
+    std::atomic<float> inPeak { 0.0f }, inRms { 0.0f }, outPeak { 0.0f }, outRms { 0.0f }, limiterGr { 0.0f };
     std::atomic<float> gainReductionDb { 0.0f };
 
     magiceq::EqEngine eq;
