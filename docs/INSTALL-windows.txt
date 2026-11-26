@@ -1,0 +1,12 @@
+Installing MagicEQ on Windows
+=============================
+
+1. Copy the whole MagicEQ.vst3 folder into:
+     C:\Program Files\Common Files\VST3\
+   (Windows will ask for administrator permission. That is normal.)
+
+2. Restart your DAW, or run its plugin rescan. MagicEQ appears under "RainWorks".
+
+MagicEQ.exe is a standalone version you can open without a DAW. Windows SmartScreen may warn
+that it is from an unknown publisher because test builds are not code-signed yet: choose
+"More info" then "Run anyway".

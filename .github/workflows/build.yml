@@ -1,0 +1,44 @@
+# Builds MagicEQ for Windows, runs the automated tests, and attaches
+# a ready-to-install plugin to each run (see the "Artifacts" section of a run's page).
+name: Build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows (VST3)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        run: cmake -S . -B build -A x64 -DMAGICEQ_COPY_AFTER_BUILD=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4 --target MagicEQ_VST3 MagicEQ_Standalone MagicEQTests
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package
+        shell: bash
+        run: |
+          ART=build/MagicEQ_artefacts/Release
+          mkdir -p dist
+          cp -R "$ART/VST3/MagicEQ.vst3" dist/
+          cp "$ART/Standalone/MagicEQ.exe" dist/
+          cp docs/INSTALL-windows.txt dist/
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: MagicEQ-windows
+          path: dist

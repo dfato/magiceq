@@ -1,0 +1,14 @@
+Installing MagicEQ on a Mac
+===========================
+
+1. Copy the plugins into your plugin folders (in Finder press Cmd+Shift+G and paste the path):
+     MagicEQ.component  ->  ~/Library/Audio/Plug-Ins/Components/     (Logic, GarageBand, Ableton, etc.)
+     MagicEQ.vst3       ->  ~/Library/Audio/Plug-Ins/VST3/           (Ableton, FL Studio, Cubase, Reaper, etc.)
+
+2. These test builds are not notarized by Apple yet, so macOS may block them. Open Terminal and run:
+     xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/MagicEQ.component
+     xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/MagicEQ.vst3
+
+3. Restart your DAW (Logic: it scans new Audio Units on launch). MagicEQ appears under "RainWorks".
+
+MagicEQ.app is a standalone version you can open without a DAW (run the same xattr command on it first).
