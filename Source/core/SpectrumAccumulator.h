@@ -38,6 +38,10 @@ public:
     double getActiveSeconds() const noexcept { return activeSeconds; }
     int getNumActiveFrames() const noexcept { return activeFrames; }
 
+    /** Loudness of each frame that passed the gate (RMS and peak, dBFS), for Detect's compressor settings. */
+    struct FrameLevel { float rmsDb, peakDb; };
+    const std::vector<FrameLevel>& getActiveFrameLevels() const noexcept { return frameLevels; }
+
     /** Level of the most recent frame, in dBFS. */
     float getLastFrameLevelDb() const noexcept { return lastFrameDb; }
 
@@ -53,6 +57,7 @@ private:
     std::vector<float> window, input, work;
     std::vector<double> powerSum, framePower;
     int inputPos = 0;
+    std::vector<FrameLevel> frameLevels;
 
     int activeFrames = 0;
     double activeSeconds = 0.0;

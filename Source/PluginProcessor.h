@@ -5,6 +5,8 @@
 #include "Parameters.h"
 #include "core/MatchFitter.h"
 #include "core/SpectrumAccumulator.h"
+#include "core/Dynamics.h"
+#include "dsp/Compressor.h"
 #include "dsp/EqEngine.h"
 
 /** A lock-free single-producer/single-consumer sample queue (audio thread -> UI/analysis). */
@@ -81,6 +83,13 @@ public:
     double getDetectTargetSeconds() const;
     bool isHearingVoice() const noexcept;           // the last analysed frame passed the gate
     const magiceq::MatchResult& getLastMatch() const noexcept { return lastMatch; }
+    const magiceq::DynamicsFit& getLastDynamics() const noexcept { return lastDynamics; }
+
+    /** Current compressor settings, read from the parameters. */
+    magiceq::CompSettings getComp() const;
+
+    /** Largest compressor gain reduction since the last call, in dB (UI meter; message thread). */
+    float takeGainReductionDb() noexcept { return gainReductionDb.exchange (0.0f); }
 
     // ----- A/B compare (message thread only) -----
     void switchAB();
@@ -114,6 +123,15 @@ private:
     std::array<BandParams, magiceq::EqEngine::numBands> bandParams;
     std::atomic<float>* outputParam = nullptr;
 
+    struct CompParams
+    {
+        std::atomic<float>* on = nullptr, *threshold = nullptr, *ratio = nullptr, *attack = nullptr,
+                          *release = nullptr, *knee = nullptr, *makeup = nullptr, *mix = nullptr;
+    } compParams;
+
+    magiceq::Compressor compressor;
+    std::atomic<float> gainReductionDb { 0.0f };
+
     magiceq::EqEngine eq;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> outputGain;
     std::vector<float> monoScratch;
@@ -126,6 +144,7 @@ private:
     std::vector<float> detectPullBuffer = std::vector<float> (1 << 14);
     DetectState detectState = DetectState::idle;
     magiceq::MatchResult lastMatch;
+    magiceq::DynamicsFit lastDynamics;
     double listenStartedMs = 0.0;
 
     struct GlideItem

@@ -21,6 +21,15 @@ MagicEQProcessor::MagicEQProcessor()
     }
     outputParam = apvts.getRawParameterValue (params::output);
 
+    compParams.on        = apvts.getRawParameterValue (params::compOn);
+    compParams.threshold = apvts.getRawParameterValue (params::compThresh);
+    compParams.ratio     = apvts.getRawParameterValue (params::compRatio);
+    compParams.attack    = apvts.getRawParameterValue (params::compAttack);
+    compParams.release   = apvts.getRawParameterValue (params::compRelease);
+    compParams.knee      = apvts.getRawParameterValue (params::compKnee);
+    compParams.makeup    = apvts.getRawParameterValue (params::compMakeup);
+    compParams.mix       = apvts.getRawParameterValue (params::compMix);
+
     startTimerHz (30);
 }
 
@@ -45,6 +54,9 @@ void MagicEQProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
         eq.setTarget (b, getBand (b));
     eq.prepare (sampleRate);
 
+    compressor.setSettings (getComp());
+    compressor.prepare (sampleRate);
+
     outputGain.reset (sampleRate, 0.02);
     outputGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputParam->load()));
 
@@ -65,6 +77,20 @@ BandSettings MagicEQProcessor::getBand (int band) const
     s.q = p.q->load();
     s.slopeIndex = juce::jlimit (0, numCutSlopes - 1, (int) p.slope->load());
     return s;
+}
+
+CompSettings MagicEQProcessor::getComp() const
+{
+    CompSettings c;
+    c.enabled     = compParams.on->load() > 0.5f;
+    c.thresholdDb = compParams.threshold->load();
+    c.ratio       = juce::jmax (1.0f, compParams.ratio->load());
+    c.attackMs    = compParams.attack->load();
+    c.releaseMs   = compParams.release->load();
+    c.kneeDb      = compParams.knee->load();
+    c.makeupDb    = compParams.makeup->load();
+    c.mix         = compParams.mix->load() / 100.0f;
+    return c;
 }
 
 void MagicEQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -107,6 +133,12 @@ void MagicEQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         eq.setTarget (b, getBand (b));
 
     eq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
+
+    // Compressor after the EQ, so the EQ's tone shaping is what gets compressed (the usual vocal chain order).
+    compressor.setSettings (getComp());
+    const float gr = compressor.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
+    float prev = gainReductionDb.load (std::memory_order_relaxed);
+    while (gr > prev && ! gainReductionDb.compare_exchange_weak (prev, gr, std::memory_order_relaxed)) {}
 
     outputGain.setTargetValue (juce::Decibels::decibelsToGain (outputParam->load()));
     if (outputGain.isSmoothing())
@@ -210,6 +242,7 @@ void MagicEQProcessor::finishDetect()
     options.strength = apvts.getRawParameterValue (params::strength)->load() / 100.0f;
     const int styleIndex = (int) apvts.getRawParameterValue (params::style)->load();
     lastMatch = MatchFitter::fit (spectrum, styleIndex, options);
+    lastDynamics = DynamicsFitter::fit (accumulator.getActiveFrameLevels(), styleIndex, options.strength);
 
     // Turn the result into parameter moves. One undo step covers the whole Detect.
     undoManager.beginNewTransaction ("Detect");
@@ -253,6 +286,23 @@ void MagicEQProcessor::finishDetect()
             // Fade out, then switch off once the glide is done.
             addGlide (param (params::gain (b)), 0.0f);
             afterGlide.push_back ({ param (params::on (b)), 0.0f });
+        }
+    }
+
+    // Compressor: switch on (or off) at once, and glide the knobs into place.
+    if (lastDynamics.profile.valid)
+    {
+        const auto& c = lastDynamics.comp;
+        setNow (param (params::compOn), c.enabled ? 1.0f : 0.0f);
+        if (c.enabled)
+        {
+            addGlide (param (params::compThresh), c.thresholdDb);
+            addGlide (param (params::compRatio), c.ratio);
+            addGlide (param (params::compAttack), c.attackMs);
+            addGlide (param (params::compRelease), c.releaseMs);
+            addGlide (param (params::compKnee), c.kneeDb);
+            addGlide (param (params::compMakeup), c.makeupDb);
+            addGlide (param (params::compMix), c.mix * 100.0f);
         }
     }
 
