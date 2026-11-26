@@ -4,8 +4,12 @@
 
 #include "Parameters.h"
 #include "core/MatchFitter.h"
+#include "core/PresetManager.h"
 #include "core/SpectrumAccumulator.h"
+#include "core/Dynamics.h"
+#include "dsp/Compressor.h"
 #include "dsp/EqEngine.h"
+#include "dsp/Limiter.h"
 
 /** A lock-free single-producer/single-consumer sample queue (audio thread -> UI/analysis). */
 class SampleFifo
@@ -81,9 +85,32 @@ public:
     double getDetectTargetSeconds() const;
     bool isHearingVoice() const noexcept;           // the last analysed frame passed the gate
     const magiceq::MatchResult& getLastMatch() const noexcept { return lastMatch; }
+    const magiceq::DynamicsFit& getLastDynamics() const noexcept { return lastDynamics; }
+
+    /** Current compressor settings, read from the parameters. */
+    magiceq::CompSettings getComp() const;
+
+    /** Largest compressor gain reduction since the last call, in dB (UI meter; message thread). */
+    float takeGainReductionDb() noexcept { return gainReductionDb.exchange (0.0f); }
+
+    /** Current limiter settings, read from the parameters. */
+    magiceq::LimiterSettings getLimiter() const;
+
+    /** Meter readings since the last call (message thread). Peaks are linear, limiter GR in dB. */
+    struct MeterReadings { float inPeak = 0, inRms = 0, outPeak = 0, outRms = 0, limiterGrDb = 0; };
+    MeterReadings takeMeterReadings() noexcept;
 
     // ----- A/B compare (message thread only) -----
     void switchAB();
+
+    // ----- Presets (message thread only) -----
+    magiceq::PresetManager& getPresets() noexcept { return presets; }
+    magiceq::ParamValues captureValues() const;
+    bool loadPreset (const juce::String& name);        // one Undo step
+    bool saveCurrentAs (const juce::String& name);
+    juce::String getCurrentPresetName() const { return currentPreset; }
+    bool isPresetModified() const;                    // changed since the preset was loaded or saved
+    void stepPreset (int delta);                      // previous / next
     bool isOnB() const noexcept { return onB; }
 
     /** Current settings of a band, read from the parameters. */
@@ -114,6 +141,18 @@ private:
     std::array<BandParams, magiceq::EqEngine::numBands> bandParams;
     std::atomic<float>* outputParam = nullptr;
 
+    struct CompParams
+    {
+        std::atomic<float>* on = nullptr, *threshold = nullptr, *ratio = nullptr, *attack = nullptr,
+                          *release = nullptr, *knee = nullptr, *makeup = nullptr, *mix = nullptr;
+    } compParams;
+
+    magiceq::Compressor compressor;
+    magiceq::Limiter limiter;
+    std::atomic<float>* limOnParam = nullptr, *limCeilingParam = nullptr, *limReleaseParam = nullptr, *limTruePeakParam = nullptr;
+    std::atomic<float> inPeak { 0.0f }, inRms { 0.0f }, outPeak { 0.0f }, outRms { 0.0f }, limiterGr { 0.0f };
+    std::atomic<float> gainReductionDb { 0.0f };
+
     magiceq::EqEngine eq;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> outputGain;
     std::vector<float> monoScratch;
@@ -126,6 +165,7 @@ private:
     std::vector<float> detectPullBuffer = std::vector<float> (1 << 14);
     DetectState detectState = DetectState::idle;
     magiceq::MatchResult lastMatch;
+    magiceq::DynamicsFit lastDynamics;
     double listenStartedMs = 0.0;
 
     struct GlideItem
@@ -141,6 +181,11 @@ private:
     // A/B
     bool onB = false;
     juce::ValueTree otherSlot;
+
+    // Presets
+    magiceq::PresetManager presets { magiceq::PresetManager::defaultFolder() };
+    juce::String currentPreset { "Init (Flat)" };
+    magiceq::ParamValues presetSnapshot;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MagicEQProcessor)
 };

@@ -27,7 +27,7 @@ struct StyleProfile
     float maxBoostDb;   // the most Detect may boost any single region
     float maxCutDb;     // the most Detect may cut any single region (positive number)
 
-    // Compressor character. Not used yet: the compressor arrives in stage 2.
+    // Compressor character: Detect's starting point, adapted to each performance (see Dynamics.cpp).
     float compRatio;
     float compAttackMs;
     float compReleaseMs;

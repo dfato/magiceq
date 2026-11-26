@@ -59,14 +59,32 @@ MatchResult MatchFitter::fit (const GridCurve& measuredSpectrum, int styleIndex,
 
     // 1. Level-match: line both curves up across the core vocal range so we compare tone, not loudness.
     result.target = StyleLibrary::targetCurve (styleIndex);
-    const double offset = weightedMean (measuredSpectrum, 200.0, 4000.0) - weightedMean (result.target, 200.0, 4000.0);
+    // The median difference is used, not the mean, so a big resonance in one place (the very thing
+    // Detect should fix) doesn't drag the whole comparison up or down with it.
+    std::vector<double> diffs;
+    for (int i = 0; i < N; ++i)
+        if (freqAt (i) >= 200.0 && freqAt (i) <= 4000.0)
+            diffs.push_back ((double) measuredSpectrum[(size_t) i] - result.target[(size_t) i]);
+    std::nth_element (diffs.begin(), diffs.begin() + (std::ptrdiff_t) (diffs.size() / 2), diffs.end());
+    const double offset = diffs[diffs.size() / 2];
     for (int i = 0; i < N; ++i)
         result.measured[(size_t) i] = (float) (measuredSpectrum[(size_t) i] - offset);
 
     // 2. Where should Detect listen? Not below the low cut, and less at the very top,
     //    where noise and mic roll-off make the measurement unreliable.
     GridCurve weight {};
-    const double lowCut = style.lowCutHz;
+    // Where does this voice's own low end stop? Walk down from 400 Hz while the level stays within
+    // 10 dB of the voice's 150-400 Hz body. A deep voice reaches lower than a high one; rumble below
+    // a dip doesn't count. The low cut goes a little under that, within a range set by the style.
+    const double body = weightedMean (result.measured, 150.0, 400.0);
+    int lowest = N - 1;
+    for (int i = N - 1; i >= 0; --i)
+        if (freqAt (i) <= 400.0) { lowest = i; break; }
+    while (lowest > 0 && result.measured[(size_t) lowest - 1] >= body - 10.0)
+        --lowest;
+    result.voiceLowestHz = (float) freqAt (lowest);
+
+    const double lowCut = std::round (std::clamp (result.voiceLowestHz * 0.75, style.lowCutHz * 0.7, style.lowCutHz * 1.5) / 5.0) * 5.0;
     for (int i = 0; i < N; ++i)
     {
         const double f = freqAt (i);
@@ -168,32 +186,80 @@ MatchResult MatchFitter::fit (const GridCurve& measuredSpectrum, int styleIndex,
 
     // 5b. Re-balance gains together. A bell's dB shape scales almost linearly with its gain,
     //    so each pass solves a small weighted least-squares problem per band.
-    for (int pass = 0; pass < 4 && ! tone.empty(); ++pass)
+    auto rebalance = [&] (std::vector<BandSettings>& bands)
     {
+        for (int pass = 0; pass < 4 && ! bands.empty(); ++pass)
+        {
+            for (size_t b = 0; b < bands.size(); ++b)
+            {
+                GridCurve others {};
+                for (size_t o = 0; o < bands.size(); ++o)
+                {
+                    if (o == b) continue;
+                    const auto r = responseOf (bands[o]);
+                    for (int i = 0; i < N; ++i) others[(size_t) i] += r[(size_t) i];
+                }
+
+                auto unit = bands[b];
+                unit.gainDb = 1.0f;
+                const auto shape = responseOf (unit);
+
+                double num = 0.0, den = 0.0;
+                for (int i = 0; i < N; ++i)
+                {
+                    const double w = weight[(size_t) i];
+                    num += w * shape[(size_t) i] * (desired[(size_t) i] - others[(size_t) i]);
+                    den += w * shape[(size_t) i] * shape[(size_t) i];
+                }
+
+                if (den > 1.0e-6)
+                    bands[b].gainDb = (float) std::clamp (num / den, (double) -style.maxCutDb, (double) style.maxBoostDb);
+            }
+        }
+    };
+
+    auto errorOf = [&] (const std::vector<BandSettings>& bands)
+    {
+        GridCurve sum {};
+        for (const auto& b : bands)
+        {
+            const auto r = responseOf (b);
+            for (int i = 0; i < N; ++i) sum[(size_t) i] += r[(size_t) i];
+        }
+        double e = 0.0, wsum = 0.0;
+        for (int i = 0; i < N; ++i)
+        {
+            const double d = desired[(size_t) i] - sum[(size_t) i];
+            e += weight[(size_t) i] * d * d;
+            wsum += weight[(size_t) i];
+        }
+        return std::sqrt (e / std::max (wsum, 1.0));
+    };
+
+    rebalance (tone);
+
+    // 5c. Prune: drop any band whose removal barely changes how well the curve is matched.
+    //     This removes pairs that cancel each other and bands chasing small measurement wiggles,
+    //     so Detect uses as few bands as the recording actually needs.
+    for (bool removed = true; removed && tone.size() > 1;)
+    {
+        removed = false;
+        const double base = errorOf (tone);
+        size_t best = tone.size();
+        double bestCost = 0.15; // dB of RMS error a band must be worth to stay
         for (size_t b = 0; b < tone.size(); ++b)
         {
-            GridCurve others {};
-            for (size_t o = 0; o < tone.size(); ++o)
-            {
-                if (o == b) continue;
-                const auto r = responseOf (tone[o]);
-                for (int i = 0; i < N; ++i) others[(size_t) i] += r[(size_t) i];
-            }
-
-            auto unit = tone[b];
-            unit.gainDb = 1.0f;
-            const auto shape = responseOf (unit);
-
-            double num = 0.0, den = 0.0;
-            for (int i = 0; i < N; ++i)
-            {
-                const double w = weight[(size_t) i];
-                num += w * shape[(size_t) i] * (desired[(size_t) i] - others[(size_t) i]);
-                den += w * shape[(size_t) i] * shape[(size_t) i];
-            }
-
-            if (den > 1.0e-6)
-                tone[b].gainDb = (float) std::clamp (num / den, (double) -style.maxCutDb, (double) style.maxBoostDb);
+            auto without = tone;
+            without.erase (without.begin() + (std::ptrdiff_t) b);
+            rebalance (without);
+            const double cost = errorOf (without) - base;
+            if (cost < bestCost) { bestCost = cost; best = b; }
+        }
+        if (best < tone.size())
+        {
+            tone.erase (tone.begin() + (std::ptrdiff_t) best);
+            rebalance (tone);
+            removed = true;
         }
     }
 
@@ -210,7 +276,7 @@ MatchResult MatchFitter::fit (const GridCurve& measuredSpectrum, int styleIndex,
     BandSettings lowCutBand;
     lowCutBand.enabled = true;
     lowCutBand.type = BandType::LowCut;
-    lowCutBand.frequency = style.lowCutHz;
+    lowCutBand.frequency = (float) lowCut;
     lowCutBand.q = 0.707f;
     lowCutBand.slopeIndex = 1; // 24 dB/oct
 

@@ -4,6 +4,10 @@
 
 #include "PluginProcessor.h"
 #include "ui/BandPanel.h"
+#include "ui/CompPanel.h"
+#include "ui/LimiterPanel.h"
+#include "ui/Meters.h"
+#include "ui/PresetBar.h"
 #include "ui/EqGraph.h"
 #include "ui/RainLookAndFeel.h"
 
@@ -26,9 +30,14 @@ private:
 
     MagicEQProcessor& processor;
     magiceq::ui::RainLookAndFeel lnf;
+    juce::TooltipWindow tooltips { this, 700 };
 
     magiceq::ui::EqGraph graph;
     magiceq::ui::BandPanel bandPanel;
+    magiceq::ui::CompPanel compPanel;
+    magiceq::ui::MeterStrip meters;
+    magiceq::ui::LimiterPanel limiterPanel;
+    magiceq::ui::PresetBar presetBar;
 
     juce::ComboBox styleBox, lengthBox;
     juce::Slider strength, output;

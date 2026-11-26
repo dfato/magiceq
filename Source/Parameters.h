@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 
 #include "core/Biquad.h"
+#include "core/ParamIds.h"
 #include "core/StyleLibrary.h"
 #include "dsp/EqEngine.h"
 
@@ -10,19 +11,6 @@ namespace magiceq::params
 {
 
 inline constexpr int numBands = EqEngine::numBands;
-
-inline juce::String bandId (int band, const char* suffix) { return "b" + juce::String (band + 1) + "_" + suffix; }
-inline juce::String on (int b)    { return bandId (b, "on"); }
-inline juce::String type (int b)  { return bandId (b, "type"); }
-inline juce::String freq (int b)  { return bandId (b, "freq"); }
-inline juce::String gain (int b)  { return bandId (b, "gain"); }
-inline juce::String q (int b)     { return bandId (b, "q"); }
-inline juce::String slope (int b) { return bandId (b, "slope"); }
-
-inline const juce::String output    = "output";
-inline const juce::String style     = "style";
-inline const juce::String strength  = "strength";
-inline const juce::String detectLen = "detect_len";
 
 inline const juce::StringArray typeNames { "Bell", "Low Shelf", "High Shelf", "Low Cut", "High Cut", "Notch" };
 inline const juce::StringArray slopeNames { "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct" };
@@ -74,6 +62,52 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
                                                                 logRange (0.1f, 18.0f), 0.707f, qAttr));
         group->addChild (std::make_unique<AudioParameterChoice> (ParameterID { slope (b), 1 }, prefix + "Slope", slopeNames, 1));
         layout.add (std::move (group));
+    }
+
+    {
+        auto ms = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int)
+        {
+            return v < 10.0f ? String (v, 1) + " ms" : String (roundToInt (v)) + " ms";
+        });
+        auto plainDb = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (v, 1) + " dB"; });
+        auto ratioAttr = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int)
+        {
+            return String (v, v < 10.0f ? 1 : 0) + ":1";
+        });
+
+        auto comp = std::make_unique<AudioProcessorParameterGroup> ("comp", "Compressor", "|");
+        comp->addChild (std::make_unique<AudioParameterBool>  (ParameterID { compOn, 1 }, "Comp On", false));
+        comp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { compThresh, 1 }, "Comp Threshold",
+                                                               NormalisableRange<float> (-60.0f, 0.0f, 0.1f), -18.0f, db));
+        comp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { compRatio, 1 }, "Comp Ratio",
+                                                               logRange (1.0f, 20.0f), 3.0f, ratioAttr));
+        comp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { compAttack, 1 }, "Comp Attack",
+                                                               logRange (0.1f, 100.0f), 10.0f, ms));
+        comp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { compRelease, 1 }, "Comp Release",
+                                                               logRange (10.0f, 1000.0f), 100.0f, ms));
+        comp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { compKnee, 1 }, "Comp Knee",
+                                                               NormalisableRange<float> (0.0f, 24.0f, 0.1f), 6.0f, plainDb));
+        comp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { compMakeup, 1 }, "Comp Makeup",
+                                                               NormalisableRange<float> (-12.0f, 24.0f, 0.1f), 0.0f, db));
+        comp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { compMix, 1 }, "Comp Mix",
+                                                               NormalisableRange<float> (0.0f, 100.0f, 1.0f), 100.0f,
+                                                               AudioParameterFloatAttributes().withLabel ("%")));
+        layout.add (std::move (comp));
+    }
+
+    {
+        auto lim = std::make_unique<AudioProcessorParameterGroup> ("lim", "Limiter", "|");
+        lim->addChild (std::make_unique<AudioParameterBool>  (ParameterID { limOn, 1 }, "Limiter On", true));
+        lim->addChild (std::make_unique<AudioParameterFloat> (ParameterID { limCeiling, 1 }, "Limiter Ceiling",
+                                                              NormalisableRange<float> (-12.0f, 0.0f, 0.1f), -1.0f,
+                                                              AudioParameterFloatAttributes().withStringFromValueFunction (
+                                                                  [] (float v, int) { return String (v, 1) + " dB"; })));
+        lim->addChild (std::make_unique<AudioParameterFloat> (ParameterID { limRelease, 1 }, "Limiter Release",
+                                                              logRange (1.0f, 1000.0f), 50.0f,
+                                                              AudioParameterFloatAttributes().withStringFromValueFunction (
+                                                                  [] (float v, int) { return v < 10.0f ? String (v, 1) + " ms" : String (roundToInt (v)) + " ms"; })));
+        lim->addChild (std::make_unique<AudioParameterBool>  (ParameterID { limTruePeak, 1 }, "Limiter True Peak", true));
+        layout.add (std::move (lim));
     }
 
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { output, 1 }, "Output",

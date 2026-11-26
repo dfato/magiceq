@@ -59,7 +59,9 @@ set(MAGICEQ_CORE_SOURCES
     Source/core/Biquad.cpp
     Source/core/StyleLibrary.cpp
     Source/core/SpectrumAccumulator.cpp
-    Source/core/MatchFitter.cpp)
+    Source/core/MatchFitter.cpp
+    Source/core/Dynamics.cpp
+    Source/core/PresetManager.cpp)
 
 target_sources(MagicEQ PRIVATE
     ${MAGICEQ_CORE_SOURCES}
@@ -67,7 +69,11 @@ target_sources(MagicEQ PRIVATE
     Source/PluginEditor.cpp
     Source/ui/RainLookAndFeel.cpp
     Source/ui/EqGraph.cpp
-    Source/ui/BandPanel.cpp)
+    Source/ui/BandPanel.cpp
+    Source/ui/CompPanel.cpp
+    Source/ui/Meters.cpp
+    Source/ui/LimiterPanel.cpp
+    Source/ui/PresetBar.cpp)
 
 target_include_directories(MagicEQ PRIVATE Source)
 
@@ -112,7 +118,8 @@ if(MAGICEQ_BUILD_SNAPSHOT)
     target_sources(MagicEQSnapshot PRIVATE
         ${MAGICEQ_CORE_SOURCES}
         Source/PluginProcessor.cpp Source/PluginEditor.cpp
-        Source/ui/RainLookAndFeel.cpp Source/ui/EqGraph.cpp Source/ui/BandPanel.cpp
+        Source/ui/RainLookAndFeel.cpp Source/ui/EqGraph.cpp Source/ui/BandPanel.cpp Source/ui/CompPanel.cpp
+        Source/ui/Meters.cpp Source/ui/LimiterPanel.cpp Source/ui/PresetBar.cpp
         Tools/Snapshot.cpp)
     target_include_directories(MagicEQSnapshot PRIVATE Source)
     juce_generate_juce_header(MagicEQSnapshot)

@@ -4,23 +4,34 @@ A vocal EQ that listens to your voice and tunes itself toward the sound of the g
 
 ![MagicEQ after a Detect run](docs/screenshot.png)
 
-**Status: stage 1 prototype.** The EQ, spectrum analyzer and Detect work. The compressor, limiter
-and a fuller preset browser come next (see [Roadmap](#roadmap)). The style curves are first-draft
+**Status: all four stages built.** EQ, spectrum analyzer, compressor, limiter, meters, presets and
+Detect all work. What's left is tuning by ear and release prep (see [Roadmap](#roadmap)). The style curves are first-draft
 guesses waiting for a human ear: see [docs/STYLE_CURVES.md](docs/STYLE_CURVES.md).
 
 ## What it does
 
 - **Detect.** Pick a style, play your vocal, press **Detect**. MagicEQ listens to 10, 20 or 30 seconds
   of *singing* (silence and gaps between phrases don't count), compares your vocal's tone with the
-  style's target curve, then glides the EQ bands into place. One Undo puts everything back.
+  style's target curve, measures how dynamic your performance is, then glides the EQ bands and the
+  compressor into place. One Undo puts everything back.
 - **21 styles** across Pop, Hip-Hop, R&B, Rock, Country, Gospel, World, Electronic and Spoken word.
 - **Strength** sets how far Detect moves toward the target (75% by default, for fine-tuning rather than
   an overhaul).
 - **12 fully adjustable bands**: Bell, Low Shelf, High Shelf, Low Cut, High Cut (12 to 48 dB/oct) and
   Notch, each with frequency, gain and Q.
+- **Compressor** after the EQ: threshold, ratio, attack, release, knee, makeup, mix (for parallel
+  compression) and a gain-reduction meter. Detect sets all of it.
+- **Limiter**, last in the chain: ceiling, release and a true-peak mode that also catches peaks
+  between samples. It looks ahead about 1 ms so it never clips, and reports that small delay to your
+  DAW so tracks stay in time.
+- **Input and output meters** with peak hold and a clip light (click a meter to reset it).
 - **Live spectrum analyzer** behind the EQ curve, plus a dashed line showing what Detect was aiming for.
+- **Presets**: 11 factory starting points, save your own (Save button), favourites (star), and
+  previous/next arrows. Your presets are small `.magiceq` files you can copy or share; the menu's
+  "Show presets folder" opens where they live.
 - **Undo / Redo** (Cmd/Ctrl+Z), **A/B compare**, output gain.
-- **Zero latency**, so it is safe to use while tracking.
+- **Tracking-friendly latency**: the EQ and compressor add none; the limiter's look-ahead adds about
+  1.2 ms, which your DAW compensates for automatically.
 
 ### Using the graph
 
@@ -92,7 +103,13 @@ ctest --test-dir build -C Release --output-on-failure
 4. **Fit bands.** A low cut goes in first at the style's frequency. Then MagicEQ repeatedly places a
    bell (or a high shelf above 8 kHz) on the largest remaining difference, sized to its width, and
    finally re-balances all the gains together. Up to 7 tone bands are used, leaving 4 free for you.
-5. **Glide.** The bands animate into place over about a second, as a single Undo step.
+5. **Compressor.** Detect also logs the loudness of every sung frame. From the softest, typical and
+   loudest lines it picks a threshold that puts the loud lines about the style's target amount into
+   compression (scaled by Strength), adjusts the ratio for how dynamic the performance is (a very
+   dynamic vocal gets firmer control, an already even one gets less), and sets makeup gain to give
+   back most of the level lost so bypass comparisons are fair.
+6. **Glide.** The bands and compressor knobs animate into place over about a second, as a single
+   Undo step.
 
 The code for this lives in `Source/core/` and has no plugin or UI dependencies, so it is tested
 directly by `Tests/TestMain.cpp`.
@@ -106,7 +123,12 @@ Source/
     StyleLibrary.*    The 21 style target curves  <- the guesses to tune
     SpectrumAccumulator.*  Long-term average spectrum with a level gate
     MatchFitter.*     Turns "your vocal vs. the target" into EQ bands
+    PresetManager.*   Factory presets, your presets, favourites
+    ParamIds.h        Every parameter ID (permanent: changing one breaks saved sessions)
+    Dynamics.*        Compressor curve + how Detect picks compressor settings
   dsp/EqEngine.h    The real-time 12-band EQ with click-free parameter glides
+  dsp/Compressor.h  The real-time compressor
+  dsp/Limiter.h     Look-ahead, true-peak limiter
   Parameters.h      Every automatable parameter
   PluginProcessor.* Audio processing, Detect state machine, A/B, saving
   PluginEditor.*    Main window
@@ -118,12 +140,10 @@ docs/               Style curve review, install notes, screenshot
 
 ## Roadmap
 
-- **Stage 2:** compressor (threshold, ratio, attack, release, knee, makeup, gain-reduction meter) that
-  Detect also sets, using the per-style compressor character already stored in each style.
-- **Stage 3:** limiter with ceiling, release and true-peak mode, placed last in the chain; input and
-  output meters.
-- **Stage 4:** preset browser (save your own, favourites), per-style descriptions in the UI, and tuning
-  the style curves from real reference vocals.
+- ~~Stage 2: compressor that Detect also sets~~ (done)
+- ~~Stage 3: limiter and meters~~ (done)
+- ~~Stage 4: preset browser and style descriptions~~ (done)
+- **Next:** tune the style curves and factory presets by ear (or from reference vocals).
 - **Release prep:** code-signing and notarization (Mac), signed installer (Windows), AAX for Pro Tools
   (needs an Avid developer account).
 

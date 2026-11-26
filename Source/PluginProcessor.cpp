@@ -21,6 +21,21 @@ MagicEQProcessor::MagicEQProcessor()
     }
     outputParam = apvts.getRawParameterValue (params::output);
 
+    compParams.on        = apvts.getRawParameterValue (params::compOn);
+    compParams.threshold = apvts.getRawParameterValue (params::compThresh);
+    compParams.ratio     = apvts.getRawParameterValue (params::compRatio);
+    compParams.attack    = apvts.getRawParameterValue (params::compAttack);
+    compParams.release   = apvts.getRawParameterValue (params::compRelease);
+    compParams.knee      = apvts.getRawParameterValue (params::compKnee);
+    compParams.makeup    = apvts.getRawParameterValue (params::compMakeup);
+    compParams.mix       = apvts.getRawParameterValue (params::compMix);
+
+    limOnParam       = apvts.getRawParameterValue (params::limOn);
+    limCeilingParam  = apvts.getRawParameterValue (params::limCeiling);
+    limReleaseParam  = apvts.getRawParameterValue (params::limRelease);
+    limTruePeakParam = apvts.getRawParameterValue (params::limTruePeak);
+
+    presetSnapshot = captureValues();
     startTimerHz (30);
 }
 
@@ -45,6 +60,13 @@ void MagicEQProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
         eq.setTarget (b, getBand (b));
     eq.prepare (sampleRate);
 
+    compressor.setSettings (getComp());
+    compressor.prepare (sampleRate);
+
+    limiter.setSettings (getLimiter());
+    limiter.prepare (sampleRate);
+    setLatencySamples (limiter.getLatencySamples()); // ~1.2 ms of look-ahead, reported so the DAW compensates
+
     outputGain.reset (sampleRate, 0.02);
     outputGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputParam->load()));
 
@@ -65,6 +87,62 @@ BandSettings MagicEQProcessor::getBand (int band) const
     s.q = p.q->load();
     s.slopeIndex = juce::jlimit (0, numCutSlopes - 1, (int) p.slope->load());
     return s;
+}
+
+CompSettings MagicEQProcessor::getComp() const
+{
+    CompSettings c;
+    c.enabled     = compParams.on->load() > 0.5f;
+    c.thresholdDb = compParams.threshold->load();
+    c.ratio       = juce::jmax (1.0f, compParams.ratio->load());
+    c.attackMs    = compParams.attack->load();
+    c.releaseMs   = compParams.release->load();
+    c.kneeDb      = compParams.knee->load();
+    c.makeupDb    = compParams.makeup->load();
+    c.mix         = compParams.mix->load() / 100.0f;
+    return c;
+}
+
+LimiterSettings MagicEQProcessor::getLimiter() const
+{
+    LimiterSettings l;
+    l.enabled   = limOnParam->load() > 0.5f;
+    l.ceilingDb = limCeilingParam->load();
+    l.releaseMs = limReleaseParam->load();
+    l.truePeak  = limTruePeakParam->load() > 0.5f;
+    return l;
+}
+
+namespace
+{
+    void storeMax (std::atomic<float>& a, float v) noexcept
+    {
+        float prev = a.load (std::memory_order_relaxed);
+        while (v > prev && ! a.compare_exchange_weak (prev, v, std::memory_order_relaxed)) {}
+    }
+
+    void measure (const juce::AudioBuffer<float>& b, int numChannels, std::atomic<float>& peak, std::atomic<float>& rms) noexcept
+    {
+        float p = 0.0f, r = 0.0f;
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            p = juce::jmax (p, b.getMagnitude (ch, 0, b.getNumSamples()));
+            r = juce::jmax (r, b.getRMSLevel (ch, 0, b.getNumSamples()));
+        }
+        storeMax (peak, p);
+        storeMax (rms, r);
+    }
+}
+
+MagicEQProcessor::MeterReadings MagicEQProcessor::takeMeterReadings() noexcept
+{
+    MeterReadings m;
+    m.inPeak = inPeak.exchange (0.0f);
+    m.inRms = inRms.exchange (0.0f);
+    m.outPeak = outPeak.exchange (0.0f);
+    m.outRms = outRms.exchange (0.0f);
+    m.limiterGrDb = limiterGr.exchange (0.0f);
+    return m;
 }
 
 void MagicEQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -96,6 +174,8 @@ void MagicEQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         }
     };
 
+    measure (buffer, numChannels, inPeak, inRms);
+
     // Detect listens to the vocal before MagicEQ changes it.
     if (captureForDetect.load (std::memory_order_relaxed))
     {
@@ -107,6 +187,11 @@ void MagicEQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         eq.setTarget (b, getBand (b));
 
     eq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
+
+    // Compressor after the EQ, so the EQ's tone shaping is what gets compressed (the usual vocal chain order).
+    compressor.setSettings (getComp());
+    const float gr = compressor.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
+    storeMax (gainReductionDb, gr);
 
     outputGain.setTargetValue (juce::Decibels::decibelsToGain (outputParam->load()));
     if (outputGain.isSmoothing())
@@ -122,6 +207,12 @@ void MagicEQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     {
         buffer.applyGain (outputGain.getTargetValue());
     }
+
+    // Limiter last, after the output gain, so its ceiling really is the final level.
+    limiter.setSettings (getLimiter());
+    storeMax (limiterGr, limiter.process (buffer.getArrayOfWritePointers(), numChannels, numSamples));
+
+    measure (buffer, numChannels, outPeak, outRms);
 
     mixToMono();
     analyzerFifo.push (monoScratch.data(), numSamples);
@@ -210,6 +301,7 @@ void MagicEQProcessor::finishDetect()
     options.strength = apvts.getRawParameterValue (params::strength)->load() / 100.0f;
     const int styleIndex = (int) apvts.getRawParameterValue (params::style)->load();
     lastMatch = MatchFitter::fit (spectrum, styleIndex, options);
+    lastDynamics = DynamicsFitter::fit (accumulator.getActiveFrameLevels(), styleIndex, options.strength);
 
     // Turn the result into parameter moves. One undo step covers the whole Detect.
     undoManager.beginNewTransaction ("Detect");
@@ -253,6 +345,23 @@ void MagicEQProcessor::finishDetect()
             // Fade out, then switch off once the glide is done.
             addGlide (param (params::gain (b)), 0.0f);
             afterGlide.push_back ({ param (params::on (b)), 0.0f });
+        }
+    }
+
+    // Compressor: switch on (or off) at once, and glide the knobs into place.
+    if (lastDynamics.profile.valid)
+    {
+        const auto& c = lastDynamics.comp;
+        setNow (param (params::compOn), c.enabled ? 1.0f : 0.0f);
+        if (c.enabled)
+        {
+            addGlide (param (params::compThresh), c.thresholdDb);
+            addGlide (param (params::compRatio), c.ratio);
+            addGlide (param (params::compAttack), c.attackMs);
+            addGlide (param (params::compRelease), c.releaseMs);
+            addGlide (param (params::compKnee), c.kneeDb);
+            addGlide (param (params::compMakeup), c.makeupDb);
+            addGlide (param (params::compMix), c.mix * 100.0f);
         }
     }
 
@@ -301,9 +410,87 @@ void MagicEQProcessor::switchAB()
     onB = ! onB;
 }
 
+// ============================================================================
+// Presets
+// ============================================================================
+
+ParamValues MagicEQProcessor::captureValues() const
+{
+    ParamValues v;
+    for (auto* p : getParameters())
+        if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (p))
+            if (r->getParameterID() != params::detectLen) // a workflow choice, not part of a sound
+                v[r->getParameterID()] = r->convertFrom0to1 (r->getValue());
+    return v;
+}
+
+bool MagicEQProcessor::loadPreset (const juce::String& name)
+{
+    const auto* preset = presets.find (name);
+    ParamValues values;
+    if (preset == nullptr || ! presets.load (*preset, values))
+        return false;
+
+    undoManager.beginNewTransaction ("Load preset " + name);
+    for (auto* p : getParameters())
+    {
+        auto* r = dynamic_cast<juce::RangedAudioParameter*> (p);
+        if (r == nullptr || r->getParameterID() == params::detectLen)
+            continue;
+
+        // Anything the preset doesn't mention goes back to its default.
+        const auto it = values.find (r->getParameterID());
+        const float normalised = it != values.end() ? r->convertTo0to1 (it->second) : r->getDefaultValue();
+        r->beginChangeGesture();
+        r->setValueNotifyingHost (normalised);
+        r->endChangeGesture();
+    }
+
+    currentPreset = name;
+    presetSnapshot = captureValues();
+    return true;
+}
+
+bool MagicEQProcessor::saveCurrentAs (const juce::String& name)
+{
+    if (! presets.save (name, captureValues()))
+        return false;
+    currentPreset = name.trim();
+    presetSnapshot = captureValues();
+    return true;
+}
+
+bool MagicEQProcessor::isPresetModified() const
+{
+    const auto now = captureValues();
+    for (const auto& [id, value] : now)
+    {
+        const auto it = presetSnapshot.find (id);
+        if (it == presetSnapshot.end() || std::abs (it->second - value) > 1.0e-3f * juce::jmax (1.0f, std::abs (value)))
+            return true;
+    }
+    return false;
+}
+
+void MagicEQProcessor::stepPreset (int delta)
+{
+    const auto all = presets.getAll();
+    if (all.empty())
+        return;
+
+    int index = 0;
+    for (int i = 0; i < (int) all.size(); ++i)
+        if (all[(size_t) i].name == currentPreset) { index = i; break; }
+
+    index = (index + delta + (int) all.size()) % (int) all.size();
+    loadPreset (all[(size_t) index].name);
+}
+
 void MagicEQProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    if (auto xml = apvts.copyState().createXml())
+    auto state = apvts.copyState();
+    state.setProperty ("preset", currentPreset, nullptr);
+    if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
 
@@ -311,7 +498,25 @@ void MagicEQProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (apvts.state.getType()))
-            apvts.replaceState (juce::ValueTree::fromXml (*xml));
+        {
+            auto state = juce::ValueTree::fromXml (*xml);
+            currentPreset = state.getProperty ("preset", "Init (Flat)").toString();
+            state.removeProperty ("preset", nullptr);
+            apvts.replaceState (state);
+
+            // "Modified" compares against the named preset if it still exists, otherwise against the session.
+            presetSnapshot = captureValues();
+            ParamValues values;
+            if (const auto* preset = presets.find (currentPreset); preset != nullptr && presets.load (*preset, values))
+            {
+                for (auto& [id, v] : presetSnapshot)
+                {
+                    const auto it = values.find (id);
+                    if (it != values.end()) v = it->second;
+                    else if (auto* r = apvts.getParameter (id)) v = r->convertFrom0to1 (r->getDefaultValue());
+                }
+            }
+        }
 }
 
 juce::AudioProcessorEditor* MagicEQProcessor::createEditor()

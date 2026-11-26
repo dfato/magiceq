@@ -31,6 +31,8 @@ void SpectrumAccumulator::reset()
     std::fill (input.begin(), input.end(), 0.0f);
     std::fill (powerSum.begin(), powerSum.end(), 0.0);
     inputPos = 0;
+    frameLevels.clear();
+    frameLevels.reserve (2048);
     activeFrames = 0;
     activeSeconds = 0.0;
     loudestFrameDb = -200.0f;
@@ -56,8 +58,12 @@ void SpectrumAccumulator::push (const float* samples, int numSamples)
 void SpectrumAccumulator::analyseFrame()
 {
     double sumSquares = 0.0;
+    float peak = 0.0f;
     for (float s : input)
+    {
         sumSquares += (double) s * s;
+        peak = std::max (peak, std::abs (s));
+    }
 
     const double rms = std::sqrt (sumSquares / fftSize);
     lastFrameDb = (float) (20.0 * std::log10 (std::max (rms, 1.0e-10)));
@@ -78,6 +84,7 @@ void SpectrumAccumulator::analyseFrame()
         powerSum[(size_t) bin] += m * m;
     }
 
+    frameLevels.push_back ({ lastFrameDb, (float) (20.0 * std::log10 (std::max ((double) peak, 1.0e-10))) });
     ++activeFrames;
     activeSeconds += (double) hopSize / sampleRate;
 }

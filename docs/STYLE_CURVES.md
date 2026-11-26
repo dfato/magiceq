@@ -18,11 +18,14 @@ that genre should look like. It is built in two layers:
 When you press Detect, MagicEQ measures your vocal, lines it up with the target, and places EQ bands
 to close the gap, scaled by **Strength** (75% by default) and limited per style.
 
-The compressor columns are stored now but used in stage 2, when the compressor arrives.
+The compressor column is the style's starting point. Detect then adapts it to your performance:
+the threshold follows your level, and the ratio and amount go up for a very dynamic vocal and down
+for one that is already even. The "GR" figure is roughly how much the loud lines get turned down
+at 100% Strength.
 
 ## The 21 draft styles
 
-| Genre | Style | Character | Low cut | Tone moves vs. baseline (dB) | Compressor (stage 2) |
+| Genre | Style | Character | Low cut | Tone moves vs. baseline (dB) | Compressor (ratio, attack / release, target GR) |
 |---|---|---|---|---|---|
 | Pop | **Modern Pop** | Bright, forward and polished with controlled lows and lifted air. | 90 Hz | 250 Hz -1.5, 400 Hz -1, 1 kHz +0, 3 kHz +1.5, 5 kHz +2, 10 kHz +3, 14 kHz +3 | 4.0:1, 5 / 60 ms, ~6 dB GR |
 | Pop | **Bedroom Pop** | Soft and intimate, warm body with gentle sparkle. | 80 Hz | 150 Hz +1, 300 Hz +0, 2.5 kHz -0.5, 6 kHz +1, 12 kHz +2 | 3.0:1, 15 / 120 ms, ~4 dB GR |
@@ -65,5 +68,8 @@ measure their vocal spectra and build the curves from real data.
   rather than overhaul. Easy to change.
 - **Detect uses at most 7 tone bands plus a low cut**, leaving 4 bands free for your own moves.
 - **Maximum boost and cut per style** are 4 to 7 dB and 6 to 9 dB. Detect never goes further.
+- **Compressor sits after the EQ**, the usual vocal chain order. A pre/post switch is easy to add.
+- **Detector style.** The compressor reacts to peaks (fast and transparent for vocals) with a 6 dB
+  soft knee by default. Some engineers prefer an RMS-style, slower feel for certain genres.
 - **Top-end safety.** If a vocal has almost nothing above 8 kHz (a dull mic, or heavy de-essing),
   Detect limits its air boost to 3 dB so it does not just raise hiss.

@@ -5,12 +5,17 @@ using namespace magiceq::ui;
 using juce::String;
 
 MagicEQEditor::MagicEQEditor (MagicEQProcessor& p)
-    : AudioProcessorEditor (&p), processor (p), graph (p), bandPanel (p)
+    : AudioProcessorEditor (&p), processor (p), graph (p), bandPanel (p), compPanel (p), meters (p),
+      limiterPanel (p, [this] { return meters.getLimiterGrDb(); }), presetBar (p)
 {
     setLookAndFeel (&lnf);
 
     addAndMakeVisible (graph);
     addAndMakeVisible (bandPanel);
+    addAndMakeVisible (compPanel);
+    addAndMakeVisible (meters);
+    addAndMakeVisible (limiterPanel);
+    addAndMakeVisible (presetBar);
 
     graph.onBandSelected = [this] (int b) { bandPanel.setBand (b); };
     bandPanel.onBandChosen = [this] (int b) { graph.setSelectedBand (b); };
@@ -94,8 +99,8 @@ MagicEQEditor::MagicEQEditor (MagicEQProcessor& p)
         addAndMakeVisible (*b);
 
     setResizable (true, true);
-    setResizeLimits (980, 580, 1800, 1100);
-    setSize (1000, 640);
+    setResizeLimits (1160, 680, 1800, 1100);
+    setSize (1240, 740);
     setWantsKeyboardFocus (true);
 
     startTimerHz (30);
@@ -132,9 +137,11 @@ void MagicEQEditor::updateDetectUi()
     {
         const auto& m = processor.getLastMatch();
         const int toneBands = (int) m.bands.size() - 1;
-        doneMessage = "Done. Set a low cut plus " + String (toneBands) + " band" + (toneBands == 1 ? "" : "s") + " for "
+        const auto& d = processor.getLastDynamics();
+        doneMessage = "Done. Set a low cut plus " + String (toneBands) + " band" + (toneBands == 1 ? "" : "s")
+                    + (d.comp.enabled ? " and the compressor" : "") + " for "
                     + StyleLibrary::get ((int) processor.apvts.getRawParameterValue (params::style)->load()).name
-                    + ". Not right? Undo, or tweak any band.";
+                    + ". Not right? Undo, or tweak anything.";
     }
     lastState = state;
 
@@ -160,9 +167,13 @@ void MagicEQEditor::updateDetectUi()
         case DS::idle:
         default:
             detectButton.setButtonText ("Detect");
+        {
+            const auto& style = StyleLibrary::get ((int) processor.apvts.getRawParameterValue (params::style)->load());
             status.setText (doneMessage.isNotEmpty() ? doneMessage
-                                                     : "Pick a style, play your vocal, then press Detect.",
+                                                     : String (style.name) + ": " + style.description + " Play your vocal, then press Detect.",
                             juce::dontSendNotification);
+            styleBox.setTooltip (String (style.name) + ": " + style.description);
+        }
             break;
     }
 
@@ -238,12 +249,22 @@ void MagicEQEditor::resized()
     detectButton.setBounds (detectCol.withTrimmedTop (14).withHeight (34));
 
     // Status line with progress bar
-    auto statusRow = r.removeFromTop (26).reduced (16, 0);
+    auto statusRow = r.removeFromTop (34).reduced (16, 0);
     progressBounds = statusRow.removeFromBottom (4);
+    statusRow.removeFromBottom (2);
+    presetBar.setBounds (statusRow.removeFromRight (380));
+    statusRow.removeFromRight (12);
     status.setBounds (statusRow);
 
     r.reduce (12, 8);
-    bandPanel.setBounds (r.removeFromBottom (170));
+    auto bottom = r.removeFromBottom (210);
+    limiterPanel.setBounds (bottom.removeFromRight (190));
+    bottom.removeFromRight (8);
+    compPanel.setBounds (bottom.removeFromRight (juce::jmax (400, bottom.getWidth() * 9 / 20)));
+    bottom.removeFromRight (8);
+    bandPanel.setBounds (bottom);
     r.removeFromBottom (8);
+    meters.setBounds (r.removeFromRight (74));
+    r.removeFromRight (8);
     graph.setBounds (r);
 }

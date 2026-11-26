@@ -2,7 +2,12 @@
 // Run: ctest --test-dir build -C Release --output-on-failure   (or run the MagicEQTests program directly)
 
 #include "core/Biquad.h"
+#include "core/Dynamics.h"
+#include "dsp/Compressor.h"
+#include "dsp/Limiter.h"
 #include "core/MatchFitter.h"
+#include "core/ParamIds.h"
+#include "core/PresetManager.h"
 #include "core/SpectrumAccumulator.h"
 #include "core/StyleLibrary.h"
 #include "dsp/EqEngine.h"
@@ -231,12 +236,283 @@ static void testDetect()
     }
 }
 
+static std::vector<SpectrumAccumulator::FrameLevel> frames (float quietDb, float loudDb, float crestDb, int count);
+
+/** Dominic's question: is Detect really tailored to each recording, or does it just apply a fixed
+    curve per style? Same style, two very different vocals: the results must be clearly different,
+    and each must move in the direction its own recording needs. */
+static void testDetectIsTailored()
+{
+    std::puts ("Detect is tailored to each recording (same style, different vocals)");
+    const int style = 0; // both use Modern Pop
+
+    // Vocal A: deep voice, boxy (+6 dB at 400 Hz) and dull (-5 dB around 4 kHz), very dynamic and spiky.
+    auto curveA = [&] (double f) { return styleCurveAt (style, f) + bumpDb (f, 400, 6.0, 1.0) + bumpDb (f, 4000, -5.0, 1.2); };
+    // Vocal B: high voice with little low end, thin (-5 dB at 250 Hz) and harsh (+5 dB at 3.5 kHz), even and smooth.
+    auto curveB = [&] (double f)
+    {
+        const double rollOff = f < 220.0 ? -14.0 * std::log2 (220.0 / f) : 0.0;
+        return styleCurveAt (style, f) + rollOff + bumpDb (f, 250, -5.0, 1.0) + bumpDb (f, 3500, 5.0, 1.0);
+    };
+
+    auto a = detect (curveA, style, 1.0f, 41);
+    auto b = detect (curveB, style, 1.0f, 42);
+
+    auto describe = [] (const char* who, const MatchResult& m)
+    {
+        std::printf ("  %s: low cut %.0f Hz", who, m.bands.front().frequency);
+        for (size_t i = 1; i < m.bands.size(); ++i)
+            std::printf (" | %s %.0f Hz %+.1f dB", m.bands[i].type == BandType::HighShelf ? "shelf" : "bell",
+                         m.bands[i].frequency, m.bands[i].gainDb);
+        std::printf ("\n");
+    };
+    describe ("vocal A", a);
+    describe ("vocal B", b);
+
+    check (totalResponse (a.bands, 400) < -2.0, "boxy vocal A gets 400 Hz cut", totalResponse (a.bands, 400));
+    check (totalResponse (b.bands, 400) > totalResponse (a.bands, 400) + 3.0, "thin vocal B is not cut like A at 400 Hz", totalResponse (b.bands, 400));
+    check (totalResponse (a.bands, 4000) > 2.0, "dull vocal A gets presence boosted", totalResponse (a.bands, 4000));
+    check (totalResponse (b.bands, 3500) < -1.0, "harsh vocal B gets presence cut", totalResponse (b.bands, 3500));
+    check (b.bands.front().frequency > a.bands.front().frequency, "high voice B gets a higher low cut than deep voice A",
+           b.bands.front().frequency);
+
+    double biggestDifference = 0.0;
+    for (double f : { 250.0, 400.0, 1000.0, 2500.0, 4000.0, 8000.0 })
+        biggestDifference = std::max (biggestDifference, std::abs (totalResponse (a.bands, f) - totalResponse (b.bands, f)));
+    check (biggestDifference > 5.0, "the two EQ curves differ by more than 5 dB somewhere", biggestDifference);
+
+    // Compressor: dynamic, spiky, quieter recording vs. even, smooth, louder one.
+    auto ca = DynamicsFitter::fit (frames (-36.0f, -14.0f, 15.0f, 400), style, 1.0f);
+    auto cb = DynamicsFitter::fit (frames (-16.0f, -10.0f, 7.0f, 400), style, 1.0f);
+    std::printf ("  vocal A comp: threshold %.1f dB, ratio %.1f:1, attack %.1f ms, release %.0f ms, makeup %.1f dB\n",
+                 ca.comp.thresholdDb, ca.comp.ratio, ca.comp.attackMs, ca.comp.releaseMs, ca.comp.makeupDb);
+    std::printf ("  vocal B comp: threshold %.1f dB, ratio %.1f:1, attack %.1f ms, release %.0f ms, makeup %.1f dB\n",
+                 cb.comp.thresholdDb, cb.comp.ratio, cb.comp.attackMs, cb.comp.releaseMs, cb.comp.makeupDb);
+    check (std::abs (ca.comp.thresholdDb - cb.comp.thresholdDb) > 3.0f, "thresholds follow each recording's level");
+    check (ca.comp.ratio > cb.comp.ratio, "the more dynamic vocal gets a firmer ratio");
+    check (ca.comp.attackMs < cb.comp.attackMs, "the spikier vocal gets a faster attack");
+    check (std::abs (ca.comp.releaseMs - cb.comp.releaseMs) > 5.0f, "release adapts to the performance");
+}
+
+static void testCompressor()
+{
+    std::puts ("Compressor");
+    near (compressorGainDb (-30.0f, -18.0f, 4.0f, 0.0f), 0.0, 1e-6, "no gain change below the threshold");
+    near (compressorGainDb (-6.0f, -18.0f, 4.0f, 0.0f), -9.0, 1e-4, "12 dB over at 4:1 gives 9 dB of reduction");
+    near (compressorGainDb (-18.0f, -18.0f, 4.0f, 6.0f), -0.75 * 0.75, 1e-4, "soft knee eases in at the threshold");
+    near (compressorGainDb (-24.0f, -18.0f, 4.0f, 6.0f), 0.0, 1e-4, "soft knee ends half a knee below the threshold");
+
+    auto run = [] (const CompSettings& c, float amplitude)
+    {
+        Compressor comp;
+        comp.setSettings (c);
+        comp.prepare (fs);
+        const int n = 48000;
+        std::vector<float> l ((size_t) n), r ((size_t) n);
+        for (int i = 0; i < n; ++i)
+            l[(size_t) i] = r[(size_t) i] = amplitude * (float) std::sin (2.0 * 3.14159265358979 * 220.0 * i / fs);
+        float maxGr = 0.0f;
+        for (int start = 0; start < n; start += 256)
+        {
+            float* block[] = { l.data() + start, r.data() + start };
+            maxGr = std::max (maxGr, comp.process (block, 2, std::min (256, n - start)));
+        }
+        float peak = 0.0f;
+        for (int i = n * 3 / 4; i < n; ++i) peak = std::max (peak, std::abs (l[(size_t) i]));
+        return std::pair<float, float> { 20.0f * std::log10 (peak), maxGr };
+    };
+
+    CompSettings c;
+    c.enabled = true; c.thresholdDb = -18.0f; c.ratio = 4.0f; c.kneeDb = 0.0f; c.attackMs = 1.0f; c.releaseMs = 100.0f;
+    auto [outDb, gr] = run (c, 0.5f); // -6 dBFS peaks
+    near (outDb, -15.0, 1.0, "a -6 dBFS sine comes out near -15 dBFS (9 dB of reduction)");
+    near (gr, 9.0, 1.0, "the meter reports about 9 dB of reduction");
+
+    c.makeupDb = 6.0f;
+    near (run (c, 0.5f).first, -9.0, 1.0, "makeup gain adds back 6 dB");
+
+    c.makeupDb = 0.0f;
+    c.mix = 0.0f;
+    near (run (c, 0.5f).first, -6.0, 0.05, "mix at 0% passes the signal untouched");
+
+    c.mix = 1.0f;
+    c.enabled = false;
+    near (run (c, 0.5f).first, -6.0, 0.05, "a switched-off compressor passes the signal untouched");
+}
+
+static std::vector<SpectrumAccumulator::FrameLevel> frames (float quietDb, float loudDb, float crestDb, int count)
+{
+    std::vector<SpectrumAccumulator::FrameLevel> f;
+    for (int i = 0; i < count; ++i)
+    {
+        const float rms = quietDb + (loudDb - quietDb) * (float) i / (float) (count - 1);
+        f.push_back ({ rms, rms + crestDb });
+    }
+    return f;
+}
+
+static void testDynamicsFit()
+{
+    std::puts ("Detect compressor settings");
+    const int style = 0; // Modern Pop: about 6 dB on loud lines
+    const auto& st = StyleLibrary::get (style);
+
+    auto fit = DynamicsFitter::fit (frames (-34.0f, -16.0f, 10.0f, 400), style, 1.0f);
+    check (fit.comp.enabled, "Detect switches the compressor on");
+    near (fit.expectedLoudGrDb, st.compTargetGainReductionDb, 1.5, "loud lines get about the style's target reduction");
+    check (fit.comp.makeupDb > 0.0f && fit.comp.makeupDb < fit.expectedLoudGrDb, "makeup gives back some, not all, of the reduction", fit.comp.makeupDb);
+    near (fit.comp.attackMs, st.compAttackMs, 0.01, "attack comes from the style");
+
+    // Louder recording, same performance: settings should move with the level, not change character.
+    auto louder = DynamicsFitter::fit (frames (-24.0f, -6.0f, 10.0f, 400), style, 1.0f);
+    near (louder.comp.thresholdDb - fit.comp.thresholdDb, 10.0, 0.6, "a 10 dB louder recording gets a 10 dB higher threshold");
+
+    // An already-flat (or already compressed) vocal gets a gentler setting.
+    auto flat = DynamicsFitter::fit (frames (-20.0f, -15.0f, 6.0f, 400), style, 1.0f);
+    check (flat.comp.ratio < fit.comp.ratio, "an even vocal gets a lower ratio", flat.comp.ratio);
+    check (flat.expectedLoudGrDb < fit.expectedLoudGrDb, "an even vocal gets less reduction", flat.expectedLoudGrDb);
+
+    auto none = DynamicsFitter::fit (frames (-34.0f, -16.0f, 10.0f, 400), style, 0.0f);
+    check (! none.comp.enabled, "Strength 0% leaves the compressor off");
+
+    check (! DynamicsFitter::fit ({}, style, 1.0f).profile.valid, "no audio, no compressor decision");
+}
+
+static void testLimiter()
+{
+    std::puts ("Limiter");
+
+    // A sine at a quarter of the sample rate, phased so every sample misses the crest:
+    // samples peak at 0.707 but the real (true) peak is 1.0.
+    {
+        std::vector<float> x (4800);
+        for (size_t i = 0; i < x.size(); ++i)
+            x[i] = (float) std::sin (2.0 * 3.14159265358979 * 0.25 * (double) i + 3.14159265358979 / 4.0);
+        near (Limiter::measureTruePeak (x.data(), (int) x.size()), 1.0, 0.03, "true-peak meter finds the peak between samples");
+    }
+
+    auto run = [] (const LimiterSettings& s, const std::vector<float>& input, std::vector<float>& output)
+    {
+        Limiter lim;
+        lim.setSettings (s);
+        lim.prepare (fs);
+        lim.setSettings (s);
+        output = input;
+        std::vector<float> r = input;
+        float maxGr = 0.0f;
+        for (size_t start = 0; start < output.size(); start += 333)
+        {
+            const int n = (int) std::min<size_t> (333, output.size() - start);
+            float* ch[] = { output.data() + start, r.data() + start };
+            maxGr = std::max (maxGr, lim.process (ch, 2, n));
+        }
+        return std::pair<int, float> { lim.getLatencySamples(), maxGr };
+    };
+
+    // Loud, spiky material: noise bursts and a sine, peaking about 8 dB over the ceiling.
+    std::mt19937 rng (5);
+    std::normal_distribution<float> noise (0.0f, 0.35f);
+    std::vector<float> loud (48000);
+    for (size_t i = 0; i < loud.size(); ++i)
+    {
+        const double t = (double) i / fs;
+        const float burst = std::fmod (t, 0.25) < 0.05 ? noise (rng) : 0.0f;
+        loud[i] = 0.9f * (float) std::sin (2.0 * 3.14159265358979 * 3100.0 * t) + burst;
+    }
+
+    LimiterSettings s;
+    s.ceilingDb = -1.0f;
+    s.truePeak = false;
+    std::vector<float> out;
+    auto [latency, gr] = run (s, loud, out);
+    float peak = 0.0f;
+    for (float v : out) peak = std::max (peak, std::abs (v));
+    check (20.0 * std::log10 (peak) <= -1.0 + 0.01, "sample-peak mode never goes over the ceiling", 20.0 * std::log10 (peak));
+    check (gr > 3.0f, "the limiter reports its gain reduction", gr);
+
+    s.truePeak = true;
+    run (s, loud, out);
+    const float tp = Limiter::measureTruePeak (out.data(), (int) out.size());
+    check (20.0 * std::log10 (tp) <= -1.0 + 0.3, "true-peak mode keeps between-sample peaks at the ceiling", 20.0 * std::log10 (tp));
+
+    // Quiet material passes untouched, just delayed by the reported latency.
+    std::vector<float> quiet (4800, 0.0f);
+    quiet[100] = 0.5f;
+    run (s, quiet, out);
+    check (latency > 0 && latency < 100, "latency is small (about 1.2 ms)", latency);
+    near (out[(size_t) (100 + latency)], 0.5, 1e-6, "below the ceiling the signal is untouched, only delayed by the reported latency");
+
+    // Switched off: same delay (so the DAW's timing doesn't jump), no limiting.
+    s.enabled = false;
+    run (s, loud, out);
+    near (out[(size_t) (2000 + latency)], loud[2000], 1e-6, "switched off it passes audio unchanged, with the same delay");
+}
+
+static void testPresets()
+{
+    std::puts ("Presets");
+    const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("MagicEQTestPresets");
+    dir.deleteRecursively();
+
+    {
+        PresetManager pm (dir);
+        const auto factoryCount = PresetManager::factoryPresets().size();
+        check (factoryCount >= 8, "there are factory presets", (double) factoryCount);
+        check (pm.getAll().size() == factoryCount, "no user presets to begin with");
+
+        ParamValues v { { params::freq (0), 123.0f }, { params::compRatio, 4.5f }, { params::style, 3.0f } };
+        check (pm.save ("My Lead Vocal", v), "saving a preset works");
+        check (! pm.save ("Airy Pop Lead", v), "factory names can't be overwritten");
+        check (! pm.save ("   ", v), "an empty name is refused");
+
+        const auto* saved = pm.find ("My Lead Vocal");
+        check (saved != nullptr && ! saved->factory, "the saved preset is listed under My Presets");
+
+        ParamValues back;
+        check (saved != nullptr && pm.load (*saved, back), "loading it back works");
+        near (back[params::freq (0)], 123.0, 1e-4, "values survive the round trip");
+        near (back[params::compRatio], 4.5, 1e-4, "values survive the round trip (2)");
+
+        pm.setFavourite ("My Lead Vocal", true);
+        pm.setFavourite ("Warm R&B", true);
+    }
+    {
+        PresetManager pm (dir); // a new instance, as after restarting the DAW
+        check (pm.isFavourite ("My Lead Vocal") && pm.isFavourite ("Warm R&B"), "favourites are remembered");
+        check (pm.getFavourites().size() == 2, "both favourites are listed");
+
+        const auto* p = pm.find ("My Lead Vocal");
+        check (p != nullptr && pm.remove (*p), "a user preset can be deleted");
+        check (pm.find ("My Lead Vocal") == nullptr && ! pm.isFavourite ("My Lead Vocal"), "deleting also clears the favourite");
+        const auto* f = pm.find ("Warm R&B");
+        check (f != nullptr && ! pm.remove (*f), "factory presets can't be deleted");
+    }
+
+    // Factory presets only use real parameter IDs and sensible values.
+    bool ok = true;
+    for (const auto& [name, values] : PresetManager::factoryPresets())
+        for (const auto& [id, v] : values)
+        {
+            const bool known = id.startsWith ("b") || id.startsWith ("comp_") || id.startsWith ("lim_") || id == params::style;
+            const bool sane = std::isfinite (v) && v > -100.0f && v < 20001.0f;
+            if (! known || ! sane) { ok = false; std::printf ("  bad value in '%s': %s = %f\n", name.toRawUTF8(), id.toRawUTF8(), v); }
+        }
+    check (ok, "factory presets use valid parameters and values");
+
+    dir.deleteRecursively();
+}
+
 int main()
 {
     testFilterMaths();
     testEngine();
     testGate();
     testDetect();
+    testCompressor();
+    testDynamicsFit();
+    testDetectIsTailored();
+    testLimiter();
+    testPresets();
 
     std::printf ("\n%d checks, %d failed\n", checks, failures);
     return failures == 0 ? 0 : 1;
